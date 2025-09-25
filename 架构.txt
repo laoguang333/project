@@ -1,0 +1,130 @@
+二、职责边界（高内聚、低耦合）
+1) 回测引擎（backtest_framework.py）
+
+输入：标准化行情（DataFrame，列：date, open, high, low, close, volume, money, open_interest, symbol；时间升序、设为索引）。
+
+核心：
+
+撮合：市价/限价（先从市价开始），“t 生成订单 → t+1 开盘成交 + 滑点”。
+
+费用：按名义金额收取费率；支持固定与阶梯（后续）。
+
+持仓：整数张数；均价、浮盈浮亏、逐日盯市。
+
+账户：现金、权益、保证金占用（先可选记录，不影响回测）。
+
+统计：在每根K线或每次成交后更新权益。
+
+输出（文件，不直接画图）：
+
+equity.csv：datetime, equity, cash, position_pnl
+
+trades.csv：datetime, side, size, price, fee, slippage, reason
+
+positions.csv：datetime, contracts, avg_price
+
+metrics.json：start/end, total_return, ann_vol, sharpe_like, max_drawdown, winrate, avg_trd_pnl, ...
+
+只依赖：pandas/numpy；不依赖指标和可视化（通过接口注入策略对象）。
+
+时间/交易日：不负责数据清洗（由数据层完成）；不做合约连续切换（后续可扩展）。
+
+2) 策略层（strategies/*.py）
+
+输入：回测引擎提供的“当前bar数据 + 历史Series（可从策略内部保存指标）+ 当前仓位”。
+
+输出：订单列表（方向、数量、理由），不包含成交逻辑。
+
+依赖：可调用 indicators 计算MA、ATR等，但不直接动持仓/账本。
+
+复用：策略只管信号（目标仓位 or 条件开平），方便替换/组合。
+
+3) 指标库（indicators/ta.py）
+
+输入/输出：纯函数，输入 Series / DataFrame，输出带索引对齐的 Series/DataFrame。
+
+特点：无副作用、与回测解耦；命名统一、NaN处理一致（如 min_periods）。
+
+扩展：未来加入更多指标（OI动量、成交量加权、波动率等）。
+
+4) 可视化（visualize/plot_kline.py）
+
+输入：只读 data/*.csv（原始K线） + outputs/*.csv|.json（回测结果）。
+
+输出：静态图片（K线PNG）与可选交互（后期可上 plotly 版）。
+
+图层建议：
+
+主图：K线 + MA(N1/N2) 叠加；标记成交点（买↑、卖↓，可区分开/平）；
+
+副图①：成交量（柱图）；
+
+副图②：持仓量 OI（折线）；
+
+副图③：权益曲线（与回撤）或单独一张“权益 & 回撤”图；
+
+统一标题包含：策略名、参数、回测区间、关键指标。
+
+规范：读取结果文件，不直接调用引擎（保证“结果可重放/可审计”）。
+
+三、配置与可复现
+
+用 configs/*.yaml 或命令行参数统一管理：
+
+合约参数：multiplier, tick_size, fee_rate
+
+撮合参数：slippage_ticks, order_type
+
+数据文件路径 & 输出路径
+
+策略参数：sma_n, contracts, allow_short 等
+
+日志与版本：
+
+每次运行输出一个带时间戳的子目录（确保可追踪）。
+
+metrics.json写入策略名、参数、引擎版本、数据摘要hash。
+
+随机性：几乎无；若以后加随机（如成交优先级），固定 seed。
+
+四、数据与时间轴规范
+
+时间列：统一 datetime（时区不必复杂化，保持源数据本地时间即可）。
+
+缺口/停牌：保持分钟连续或按真实成交时间存储；回测只顺序迭代，不“补齐”。
+
+合约滚动：先按单合约文件跑；以后可做“主力连续”：预先生成连续K线（外部数据处理），回测仍视为单标的。
+
+五、指标与风险度量（建议的最小集）
+
+收益：累计收益、年化收益（按分钟到年换算规则固定写死在引擎）。
+
+风险：年化波动、最大回撤、回撤时长。
+
+性能：Sharpe（或类似指标）、Calmar（后续）。
+
+交易：笔数、胜率、平均盈亏、平均持仓时长、滑点/手续费占比。
+
+资金占用（可选）：保证金比例、风险暴露。
+
+六、扩展点（按优先级）
+
+风控模块：统一接口（如 max_pos, stop_loss, trailing_stop, time_stop）。
+
+组合层：多标的/多策略权重聚合（先保留接口）。
+
+订单类型：限价、IOC、FOK（先只做市价稳定性最好）。
+
+事件回放：成交回报、撮合细节日志（便于复盘）。
+
+报告生成：把 metrics.json + 图表 自动汇总成一份 HTML/PDF。
+
+七、运行流程（清晰的数据流）
+
+准备数据 data/IF1005_2010.csv（字段与你现有一致）。
+
+运行回测引擎（读取配置/命令行）→ 产出 outputs/*。
+
+运行可视化脚本（读 data+outputs）→ 生成 K 线图、权益图。
+
+查看 metrics.json 与图片；若调整策略参数，仅回测引擎重跑，可视化复用。
