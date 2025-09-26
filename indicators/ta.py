@@ -34,18 +34,18 @@ def macd(series: pd.Series, fast_period: int = 12, slow_period: int = 26, signal
     })
 
 def kline_overlap(df: pd.DataFrame, lookback: int = 3) -> pd.Series:
-    """K线重叠指标
-    如果过去lookback根K线有重叠的部分，就表示为1，否则表示为0
-    需要DataFrame包含high和low列
+    """K线重叠指标：过去 lookback 根K线的价格区间是否存在公共重叠。
+    返回 1/0；允许端点相触算重叠（<=）。若要严格正重叠，改成 <。
+    需要 df 含 ['high','low']。
     """
-    # 计算过去lookback根K线的最高价最小值和最低价最大值
-    rolling_high_min = df['high'].rolling(window=lookback).min()
-    rolling_low_max = df['low'].rolling(window=lookback).max()
-    
-    # 如果最高价最小值大于最低价最大值，则表示有重叠
-    overlap = (rolling_high_min > rolling_low_max).astype(int)
-    
+    if not {'high','low'}.issubset(df.columns):
+        raise ValueError("df 必须包含 'high' 和 'low' 列")
+    # 公共交集的判定：max(low) <= min(high)
+    rolling_low_max  = df['low'].rolling(window=lookback, min_periods=lookback).max()
+    rolling_high_min = df['high'].rolling(window=lookback, min_periods=lookback).min()
+    overlap = (rolling_low_max <= rolling_high_min).astype('Int64').fillna(0)
     return overlap
+
 
 def ma_crossover(series1: pd.Series, series2: pd.Series) -> pd.Series:
     """均线交叉指标
