@@ -58,28 +58,36 @@ class Position:
     def update_on_fill(self, side: str, size: int, price: float):
         if side not in ("BUY","SELL"):
             raise ValueError("side must be BUY/SELL")
-        signed = size if side=="BUY" else -size
+        signed = size if side == "BUY" else -size
+
+        if self.contracts == 0:
+            self.contracts = signed
+            self.avg_price = price if self.contracts != 0 else 0.0
+            return
+
         new_contracts = self.contracts + signed
-        # If position flips sign, realize it then reset avg_price with remainder
-        if self.contracts == 0 or np.sign(self.contracts) == np.sign(new_contracts):
-            # adding to same side
-            if self.contracts == 0:
-                self.avg_price = price
-            else:
-                # weighted average
-                total = abs(self.contracts) + size
-                self.avg_price = (abs(self.contracts)*self.avg_price + size*price)/total
+
+        # Adding to an existing position on the same side
+        if (self.contracts > 0 and signed > 0) or (self.contracts < 0 and signed < 0):
+            total = abs(self.contracts) + size
+            self.avg_price = (abs(self.contracts) * self.avg_price + size * price) / total
             self.contracts = new_contracts
-        else:
-            # reducing or flipping
-            if np.sign(new_contracts) == 0:
-                # flat
-                self.contracts = 0
-                self.avg_price = 0.0
-            else:
-                # flipped: keep remainder at new avg = trade price
-                self.contracts = new_contracts
-                self.avg_price = price
+            return
+
+        # Reducing but still keeping the same side exposure
+        if np.sign(self.contracts) == np.sign(new_contracts) and new_contracts != 0:
+            self.contracts = new_contracts
+            return
+
+        # Fully flat
+        if new_contracts == 0:
+            self.contracts = 0
+            self.avg_price = 0.0
+            return
+
+        # Flipped to the opposite side
+        self.contracts = new_contracts
+        self.avg_price = price
 
 # ============ Strategy Base ============
 class Strategy:
@@ -167,8 +175,18 @@ class Backtester:
             fee = abs(notional) * self.fee_rate
             executed.append(Fill(dt=dt_next, side=od.side, size=od.size, price=px, fee=fee, slippage=slip))
 
-            # Cash & position update: futures use margin but we track mark-to-market equity (cash changes on PnL)
+            current_pos = self.position.contracts
+            avg_price = self.position.avg_price
+            realized = 0.0
+            if od.side == "SELL" and current_pos > 0:
+                close_qty = min(current_pos, od.size)
+                realized = (px - avg_price) * self.mult * close_qty
+            elif od.side == "BUY" and current_pos < 0:
+                close_qty = min(-current_pos, od.size)
+                realized = (avg_price - px) * self.mult * close_qty
+
             self.position.update_on_fill(od.side, od.size, px)
+            self.cash += realized
             self.cash -= fee  # commission is cash cost
 
         self.orders_pending.clear()
