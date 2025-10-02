@@ -163,6 +163,9 @@ class Backtester:
         self.equity_curve: List[Tuple[pd.Timestamp, float]] = []
         self.fills: List[Fill] = []
         self.orders_pending: List[Order] = []  # orders created at bar t to be executed at t+1 open (market)
+        self.trade_log: List[Dict[str, Any]] = []
+        self.open_trade: Optional[Dict[str, Any]] = None
+        self.ts_to_idx: Dict[pd.Timestamp, int] = {}
 
     def _exec_orders(self, dt_next: pd.Timestamp, open_next: float):
         """Execute all pending market orders at next bar open with slippage."""
@@ -175,23 +178,81 @@ class Backtester:
             fee = abs(notional) * self.fee_rate
             executed.append(Fill(dt=dt_next, side=od.side, size=od.size, price=px, fee=fee, slippage=slip))
 
-            current_pos = self.position.contracts
+            pos_before = self.position.contracts
             avg_price = self.position.avg_price
             realized = 0.0
-            if od.side == "SELL" and current_pos > 0:
-                close_qty = min(current_pos, od.size)
+            if od.side == "SELL" and pos_before > 0:
+                close_qty = min(pos_before, od.size)
                 realized = (px - avg_price) * self.mult * close_qty
-            elif od.side == "BUY" and current_pos < 0:
-                close_qty = min(-current_pos, od.size)
+            elif od.side == "BUY" and pos_before < 0:
+                close_qty = min(-pos_before, od.size)
                 realized = (avg_price - px) * self.mult * close_qty
 
             self.position.update_on_fill(od.side, od.size, px)
             self.cash += realized
             self.cash -= fee  # commission is cash cost
 
+            pos_after = self.position.contracts
+            direction_after = "LONG" if pos_after > 0 else "SHORT" if pos_after < 0 else None
+
+            trade = self.open_trade
+            if trade is None and direction_after is not None:
+                self.open_trade = {
+                    "direction": direction_after,
+                    "entry_time": dt_next,
+                    "entry_idx": self.ts_to_idx.get(dt_next),
+                    "entry_price": self.position.avg_price,
+                    "max_size": abs(pos_after),
+                    "fees": fee,
+                    "gross_pnl": realized,
+                }
+                continue
+
+            if trade is not None:
+                trade["fees"] += fee
+                trade["gross_pnl"] += realized
+                if pos_after != 0 and direction_after == trade["direction"]:
+                    trade["entry_price"] = self.position.avg_price
+                    trade["max_size"] = max(trade["max_size"], abs(pos_after))
+
+                should_close = pos_after == 0 or (trade["direction"] == "LONG" and pos_after < 0) or (trade["direction"] == "SHORT" and pos_after > 0)
+                if should_close:
+                    exit_idx = self.ts_to_idx.get(dt_next)
+                    if exit_idx is not None and trade["entry_idx"] is not None:
+                        bars_held = max(0, exit_idx - trade["entry_idx"])
+                    else:
+                        bars_held = 0
+                    holding_minutes = (dt_next - trade["entry_time"]).total_seconds() / 60.0 if trade["entry_time"] is not None else None
+                    net_pnl = trade["gross_pnl"] - trade["fees"]
+                    trade_record = {
+                        "direction": trade["direction"],
+                        "entry_time": trade["entry_time"],
+                        "exit_time": dt_next,
+                        "entry_price": trade["entry_price"],
+                        "exit_price": px,
+                        "contracts": trade["max_size"],
+                        "gross_pnl": trade["gross_pnl"],
+                        "fees": trade["fees"],
+                        "net_pnl": net_pnl,
+                        "bars_held": bars_held,
+                        "holding_minutes": holding_minutes,
+                    }
+                    self.trade_log.append(trade_record)
+                    self.open_trade = None
+
+                    if pos_after != 0:
+                        self.open_trade = {
+                            "direction": "LONG" if pos_after > 0 else "SHORT",
+                            "entry_time": dt_next,
+                            "entry_idx": self.ts_to_idx.get(dt_next),
+                            "entry_price": self.position.avg_price,
+                            "max_size": abs(pos_after),
+                            "fees": 0.0,
+                            "gross_pnl": 0.0,
+                        }
+
         self.orders_pending.clear()
         self.fills.extend(executed)
-
     def _mark_to_market(self, dt: pd.Timestamp, last_price: float):
         """Revalue equity based on current price and avg entry price of open contracts."""
         pos = self.position.contracts
@@ -202,6 +263,14 @@ class Backtester:
 
     def run(self) -> pd.DataFrame:
         df = self.data
+        self.position = Position()
+        self.cash = self.initial_cash
+        self.equity_curve = []
+        self.fills = []
+        self.orders_pending = []
+        self.trade_log = []
+        self.open_trade = None
+        self.ts_to_idx = {ts: idx for idx, ts in enumerate(df.index)}
         self.strategy.init(df)
 
         # iterate bars; orders generated on bar i execute on i+1 open
@@ -239,7 +308,8 @@ class Backtester:
         vol = ret.std() * math.sqrt(252*4*60)  # rough: 4 hours * 60 minutes of "active" mins
         sharpe = ret.mean()/ret.std()*math.sqrt(252*4*60) if ret.std()>0 else np.nan
         max_dd = ((eq["equity"]/eq["equity"].cummax())-1.0).min()
-        return {
+
+        summary = {
             "start": eq.index[0],
             "end": eq.index[-1],
             "initial_cash": self.initial_cash,
@@ -248,8 +318,45 @@ class Backtester:
             "volatility_ann": float(vol) if not np.isnan(vol) else None,
             "sharpe_like": float(sharpe) if not np.isnan(sharpe) else None,
             "max_drawdown": float(max_dd),
-            "trades": len(self.fills)
+            "trades": len(self.fills),
         }
+
+        total_fees = sum(fill.fee for fill in self.fills)
+        summary["total_fees"] = float(total_fees)
+
+        trades_df = pd.DataFrame(self.trade_log)
+        if not trades_df.empty:
+            net = trades_df["net_pnl"]
+            summary["win_rate"] = float((net > 0).mean())
+            summary["max_trade_gain"] = float(net.max())
+            summary["max_trade_loss"] = float(net.min())
+            summary["avg_fee_per_trade"] = float(trades_df["fees"].mean())
+            summary["total_gross_pnl"] = float(trades_df["gross_pnl"].sum())
+            summary["total_net_pnl"] = float(net.sum())
+            summary["avg_bars_held"] = float(trades_df["bars_held"].mean())
+            summary["max_bars_held"] = int(trades_df["bars_held"].max())
+
+            if "holding_minutes" in trades_df.columns:
+                holding = trades_df["holding_minutes"].dropna()
+                summary["avg_holding_minutes"] = float(holding.mean()) if not holding.empty else None
+                summary["max_holding_minutes"] = float(holding.max()) if not holding.empty else None
+        else:
+            summary["win_rate"] = None
+            summary["max_trade_gain"] = None
+            summary["max_trade_loss"] = None
+            summary["avg_fee_per_trade"] = None
+            summary["total_gross_pnl"] = 0.0
+            summary["total_net_pnl"] = 0.0
+            summary["avg_bars_held"] = None
+            summary["max_bars_held"] = None
+            summary["avg_holding_minutes"] = None
+            summary["max_holding_minutes"] = None
+
+        return summary
+
+    def trades(self) -> pd.DataFrame:
+        """Return the trade log as a DataFrame."""
+        return pd.DataFrame(self.trade_log)
 
 def main():
     parser = argparse.ArgumentParser(description="Simple futures backtester for Chinese minute bars.")

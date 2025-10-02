@@ -39,17 +39,23 @@ from indicators.ta import sma, ema, macd, kline_overlap
 
 class TrapStrategy(Strategy):
     def __init__(self, params=None):
+        params = params or {}
         super().__init__(params)
-        self.params = params or {}
+        self.params = params
+        self.direction = self.params.get("direction", "long").lower()
+        if self.direction not in ("long", "short"):
+            raise ValueError("direction must be 'long' or 'short'")
+        self.hold_bars = int(self.params.get("hold_bars", 20))
+        self.cooldown_bars = int(self.params.get("cooldown_bars", 5))
         self.cooldown = 0  # 冷却计数 (单位: 1分钟bar)
         self.position_bars_held = 0  # 记录持仓bar数
-        
     def init(self, data: pd.DataFrame):
         # 准备多周期数据
+        self.cooldown = 0
+        self.position_bars_held = 0
         self.df_1m = data.copy()
         self.df_1m = self.df_1m.sort_index()
         self._prepare_multi_timeframes()
-
     def _prepare_multi_timeframes(self):
         # === 5分钟周期 ===
         self.df_5m = self.df_1m.resample("5min", label="right", closed="right").agg({
@@ -91,54 +97,63 @@ class TrapStrategy(Strategy):
 
     def on_bar(self, i: int, row: pd.Series, pos: Position) -> list:
         orders = []
-        
+
         # 确保有足够的数据进行计算
         if i < 40 or i >= len(self.df_1m) - 1:
             return orders
-        
-        # 持仓处理
-        if pos.contracts > 0:
+
+        # 持仓处理（多空通用）
+        if pos.contracts != 0:
             self.position_bars_held += 1
-            # 持仓满20根bar强平
-            if self.position_bars_held >= 20:
-                orders.append(Order(side="SELL", size=pos.contracts, reason="持仓满20根K线平仓"))
+            if self.position_bars_held >= self.hold_bars:
+                exit_side = "SELL" if pos.contracts > 0 else "BUY"
+                orders.append(Order(side=exit_side, size=abs(pos.contracts), reason=f"hold_{self.hold_bars}_bars_exit"))
                 self.position_bars_held = 0
-                self.cooldown = 5  # 冷却5根bar
+                self.cooldown = self.cooldown_bars
             return orders
-        
+
         # 空仓，处理冷却
         if self.cooldown > 0:
             self.cooldown -= 1
             return orders
-        
+
         # 开仓条件检查
         ts = self.df_1m.index[i]
         row1 = self.df_1m.iloc[i]
         row5 = self.df5_for_1m.iloc[i]
-        
+
         # 条件1
         recent_30m = self.df_30m.loc[:ts].tail(4)
         cond1 = len(recent_30m) == 4 and recent_30m["overlap3"].fillna(0).sum() >= 3
-        
+
         # 条件2
         cond2 = (row5["ma_range20"] >= 1.5 * row5["X"]) if pd.notna(row5["X"]) else False
-        
+
         # 条件4
         dif10 = self.df5_for_1m.iloc[max(0, i-9):i+1]["dif"].min()
         dif40 = self.df5_for_1m.iloc[max(0, i-39):i+1]["dif"].min()
         cond4 = (dif10 >= 1.2 * dif40) if pd.notna(dif10) and pd.notna(dif40) else False
-        
+
         # 条件5
         high20_prev = self.df_1m.iloc[max(0, i-20):i]["high"].max()
         cond5 = (high20_prev - row1["close"]) >= row5["X"] if pd.notna(row5["X"]) else False
-        
+
         # 条件6
         cond6 = self.df_1m.iloc[max(0, i-19):i+1]["overlap3"].sum() >= 7
-        
+
         # 所有条件满足时开仓
         if cond1 and cond2 and cond4 and cond5 and cond6:
-            contracts = self.params.get("contracts", 1)
-            orders.append(Order(side="BUY", size=contracts, reason="空头陷阱开仓"))
+            contracts = int(self.params.get("contracts", 1))
+            side = "BUY" if self.direction == "long" else "SELL"
+            reason = "bear_trap_long_entry" if self.direction == "long" else "bear_trap_short_entry"
+            orders.append(Order(side=side, size=contracts, reason=reason))
             self.position_bars_held = 0
-        
+
         return orders
+
+
+class TrapStrategyShort(TrapStrategy):
+    def __init__(self, params=None):
+        params = dict(params or {})
+        params.setdefault("direction", "short")
+        super().__init__(params)
