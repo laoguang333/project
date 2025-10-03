@@ -11,7 +11,7 @@ from bokeh.embed import components
 from IPython.display import HTML, display
 
 from .config import INSTRUMENT_INDEX, TIMEFRAME_INDEX, Instrument, Timeframe
-from .data_sources import fetch_data
+from .data_source_factory import fetch_data
 from .styles import CHART_STYLE_INDEX, ChartStyle
 
 
