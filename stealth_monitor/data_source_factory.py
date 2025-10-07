@@ -1,107 +1,115 @@
-"""Data source factory for selecting between different data loading strategies."""
+# -*- coding: utf-8 -*-
+"""Factory utilities for switching between different data loading strategies."""
 from __future__ import annotations
-from typing import Callable, Dict, Optional
+
+from typing import Dict, Optional, Protocol
+
 import pandas as pd
 
 from .config import Instrument, Timeframe
-from .data_sources import fetch_data as original_fetch_data
+from .data_sources import fetch_data as _original_fetch_data
 
-# 可选的数据源策略
-DataSourceStrategy = Callable[[Instrument, Timeframe, Optional[int], str], pd.DataFrame]
 
-# 默认使用原始数据源
+class DataSourceStrategy(Protocol):
+    """Callable signature for data loading strategies."""
+
+    def __call__(
+        self,
+        instrument: Instrument,
+        timeframe: Timeframe,
+        *,
+        limit: Optional[int] = 200,
+        adjust: str = "",
+    ) -> pd.DataFrame:
+        ...
+
+
+_strategies: Dict[str, DataSourceStrategy] = {"original": _original_fetch_data}
 _current_strategy: str = "original"
 
-# 数据源策略映射
-_strategies: Dict[str, DataSourceStrategy] = {
-    "original": original_fetch_data
-}
 
 def register_strategy(name: str, strategy: DataSourceStrategy) -> None:
-    """注册新的数据源策略"""
+    """Register a new data source strategy."""
     _strategies[name] = strategy
 
 
 def set_strategy(name: str) -> None:
-    """设置当前使用的数据源策略"""
-    global _current_strategy
+    """Switch to a registered strategy by name."""
     if name not in _strategies:
-        available = ", ".join(_strategies.keys())
-        raise ValueError(f"未知的数据源策略: {name}。可用策略: {available}")
+        available = ", ".join(sorted(_strategies))
+        raise ValueError(f"Unknown data source strategy '{name}'. Available: {available}")
+    global _current_strategy
     _current_strategy = name
 
 
 def get_current_strategy() -> str:
-    """获取当前使用的数据源策略"""
+    """Return the name of the active strategy."""
     return _current_strategy
 
 
-def get_available_strategies() -> list:
-    """获取所有可用的数据源策略"""
-    return list(_strategies.keys())
+def get_available_strategies() -> list[str]:
+    """Return the names of registered strategies."""
+    return sorted(_strategies)
 
 
 def fetch_data(
     instrument: Instrument,
     timeframe: Timeframe,
-    *, 
+    *,
     limit: Optional[int] = 200,
     adjust: str = "",
 ) -> pd.DataFrame:
-    """使用当前选择的策略获取数据"""
+    """Fetch data using the active strategy."""
     strategy = _strategies[_current_strategy]
     return strategy(instrument, timeframe, limit=limit, adjust=adjust)
 
-# 尝试导入并注册缓存数据源策略
+
 try:
-    from .cached_data_sources import fetch_data_with_cache, configure_cache, clear_cache, get_cache_info
+    from .cached_data_sources import (
+        configure_cache,
+        clear_cache,
+        fetch_data_with_cache,
+        get_cache_info,
+    )
+
     register_strategy("hybrid_cache", fetch_data_with_cache)
-    # 提供访问缓存相关功能的方法
-    cache_functions = {
+    _cache_helpers = {
         "configure": configure_cache,
         "clear": clear_cache,
-        "info": get_cache_info
+        "info": get_cache_info,
     }
-
-except ImportError as e:
-    # 如果无法导入缓存模块，不影响原有功能
-    print(f"无法导入缓存数据源模块: {e}")
-    cache_functions = None
+except Exception:  # pragma: no cover - keep original behaviour when cache import fails
+    _cache_helpers = None
 
 
-# 提供便捷的配置接口
 def use_original_data_source() -> None:
-    """使用原始的无缓存数据源"""
+    """Switch back to the original non-cached data source."""
     set_strategy("original")
 
 
 def use_hybrid_cache() -> None:
-    """使用混合缓存数据源（内存+SQLite）"""
-    if "hybrid_cache" in _strategies:
-        set_strategy("hybrid_cache")
-    else:
-        raise ValueError("混合缓存策略不可用。请确保cached_data_sources模块能够正确导入。")
+    """Enable the hybrid cache data source if it is available."""
+    if "hybrid_cache" not in _strategies:
+        raise ValueError("Hybrid cache strategy is unavailable.")
+    set_strategy("hybrid_cache")
 
 
 def configure_hybrid_cache(**kwargs) -> None:
-    """配置混合缓存参数"""
-    if cache_functions and "configure" in cache_functions:
-        cache_functions["configure"](**kwargs)
-    else:
-        raise ValueError("缓存配置功能不可用。请确保cached_data_sources模块能够正确导入。")
+    """Configure cache parameters for the hybrid cache strategy."""
+    if not _cache_helpers or "configure" not in _cache_helpers:
+        raise ValueError("Cache configuration is unavailable.")
+    _cache_helpers["configure"](**kwargs)
 
 
 def clear_hybrid_cache(clear_memory: bool = True, clear_sqlite: bool = False) -> None:
-    """清除混合缓存数据"""
-    if cache_functions and "clear" in cache_functions:
-        cache_functions["clear"](clear_memory, clear_sqlite)
-    else:
-        raise ValueError("缓存清理功能不可用。请确保cached_data_sources模块能够正确导入。")
+    """Clear cached data."""
+    if not _cache_helpers or "clear" not in _cache_helpers:
+        raise ValueError("Cache clearing is unavailable.")
+    _cache_helpers["clear"](clear_memory, clear_sqlite)
 
 
 def get_hybrid_cache_info() -> Dict:
-    """获取混合缓存状态信息"""
-    if cache_functions and "info" in cache_functions:
-        return cache_functions["info"]()
-    else:
-        raise ValueError("缓存信息功能不可用。请确保cached_data_sources模块能够正确导入。")
+    """Return diagnostic information for the hybrid cache."""
+    if not _cache_helpers or "info" not in _cache_helpers:
+        raise ValueError("Cache diagnostics are unavailable.")
+    return _cache_helpers["info"]()

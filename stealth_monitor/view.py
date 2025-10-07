@@ -3,9 +3,11 @@ from __future__ import annotations
 from typing import Any, Iterable, Optional, Sequence
 
 import numpy as np
+import pandas as pd
 from bokeh.embed import file_html
-from bokeh.models import CDSView, ColumnDataSource, IndexFilter
+from bokeh.models import CDSView, ColumnDataSource, HoverTool, IndexFilter
 from bokeh.resources import INLINE
+from bokeh.plotting import figure
 from IPython.display import HTML, display
 
 import backtesting._plotting as plotting
@@ -177,3 +179,67 @@ def render_dotted_ma(bt: Backtest, dash_pattern: Sequence[int], marker_step: int
     return fig
 
 
+def build_dotted_ma_figure_from_dataframe(
+    df: pd.DataFrame,
+    *,
+    dash_pattern: Sequence[int] = DOTTED_DASH_PATTERN,
+    marker_step: int = DOTTED_MARKER_STEP,
+) -> Any:
+    """Create a dotted MA style figure directly from a dataframe."""
+    cleaned = df.copy()
+    cleaned["datetime"] = pd.to_datetime(cleaned["datetime"])
+    cleaned = cleaned.sort_values("datetime").reset_index(drop=True)
+
+    source = ColumnDataSource(
+        data=dict(
+            datetime=cleaned["datetime"].dt.to_pydatetime().tolist(),
+            value=cleaned["close"].tolist(),
+        )
+    )
+
+    fig = figure(
+        x_axis_type="datetime",
+        height=360,
+        sizing_mode="stretch_width",
+        toolbar_location="right",
+    )
+    fig.background_fill_color = BACKGROUND_COLOR
+    fig.border_fill_color = BACKGROUND_COLOR
+    fig.yaxis.axis_label = "Price"
+    fig.xaxis.axis_label = "Time"
+
+    fig.line(
+        "datetime",
+        "value",
+        source=source,
+        line_color=LINE_COLOR,
+        line_width=2.6,
+        line_dash=list(dash_pattern),
+        line_cap="round",
+        line_join="round",
+    )
+
+    if marker_step and marker_step > 1:
+        indices = list(range(0, len(source.data["datetime"]), marker_step))
+        if indices:
+            view = CDSView(filter=IndexFilter(indices))
+            fig.scatter(
+                "datetime",
+                "value",
+                source=source,
+                view=view,
+                size=5.0,
+                color=LINE_COLOR,
+            )
+
+    fig.add_tools(
+        HoverTool(
+            tooltips=[
+                ("时间", "@datetime{%F %H:%M}"),
+                ("价格", "@value{0.00}"),
+            ],
+            formatters={"@datetime": "datetime"},
+            mode="vline",
+        )
+    )
+    return fig

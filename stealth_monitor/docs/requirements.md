@@ -31,3 +31,6 @@
 - 核心逻辑封装在 Python 包 `stealth_monitor` 内，便于复用与维护。
 - Jupyter Notebook 负责配置、控件绑定与展示。
 - 兼容 nbconvert 批处理执行，确保 notebook 可一键跑通。
+
+## 验证流程
+- 运行 `python tools/verify_notebooks.py` 即可通过 nbconvert 执行关键 Notebook（默认涵盖 `testview.ipynb`），用于人工验证展示链路。
