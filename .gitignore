@@ -40,4 +40,6 @@ Thumbs.db
 # Project artifacts
 outputs/
 data/
-*.pyc
+
+data_cache.db
+indicators/__pycache__/ta.cpython-313.pyc
