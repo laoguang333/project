@@ -24,9 +24,9 @@ class Timeframe:
 
 
 INSTRUMENTS: List[Instrument] = [
-    Instrument(key="PVC", label="PVC 主力 (v0)", kind="futures", symbol="v0"),
-    Instrument(key="L", label="塑料 L 主力 (l0)", kind="futures", symbol="l0"),
-    Instrument(key="MOUTAI", label="贵州茅台 (sh600519)", kind="stock", symbol="sh600519"),
+    Instrument(key="PVC", label="PVC )", kind="futures", symbol="v0"),
+    Instrument(key="L", label="L", kind="futures", symbol="l0"),
+    Instrument(key="MOUTAI", label="mt", kind="stock", symbol="sh600519"),
 ]
 
 
