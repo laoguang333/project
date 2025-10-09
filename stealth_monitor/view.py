@@ -186,9 +186,7 @@ def build_dotted_ma_figure_from_dataframe(
     marker_step: int = DOTTED_MARKER_STEP,
 ) -> Any:
     """Create a dotted MA style figure directly from a dataframe."""
-    cleaned = df.copy()
-    cleaned["datetime"] = pd.to_datetime(cleaned["datetime"])
-    cleaned = cleaned.sort_values("datetime").reset_index(drop=True)
+    cleaned = _prepare_dataframe(df)
 
     source = ColumnDataSource(
         data=dict(
@@ -197,16 +195,7 @@ def build_dotted_ma_figure_from_dataframe(
         )
     )
 
-    fig = figure(
-        x_axis_type="datetime",
-        height=360,
-        sizing_mode="stretch_width",
-        toolbar_location="right",
-    )
-    fig.background_fill_color = BACKGROUND_COLOR
-    fig.border_fill_color = BACKGROUND_COLOR
-    fig.yaxis.axis_label = "Price"
-    fig.xaxis.axis_label = "Time"
+    fig = _base_dataframe_figure()
 
     fig.line(
         "datetime",
@@ -243,3 +232,158 @@ def build_dotted_ma_figure_from_dataframe(
         )
     )
     return fig
+
+
+def build_silver_candles_figure_from_dataframe(df: pd.DataFrame) -> Any:
+    """Create a silver-themed candlestick figure from a dataframe."""
+    cleaned = _prepare_dataframe(df)
+    width = _infer_bar_width(cleaned["datetime"])
+
+    inc = cleaned["close"] >= cleaned["open"]
+    body_color = np.where(inc, "#C0C0C0", "#8C8C8C")
+    wick_color = np.where(inc, "#A0A0A0", "#7A7A7A")
+
+    source = ColumnDataSource(
+        data=dict(
+            datetime=cleaned["datetime"].dt.to_pydatetime().tolist(),
+            open=cleaned["open"].tolist(),
+            high=cleaned["high"].tolist(),
+            low=cleaned["low"].tolist(),
+            close=cleaned["close"].tolist(),
+            body_color=body_color.tolist(),
+            wick_color=wick_color.tolist(),
+        )
+    )
+
+    fig = _base_dataframe_figure()
+    fig.segment(
+        x0="datetime",
+        y0="high",
+        x1="datetime",
+        y1="low",
+        source=source,
+        line_color="wick_color",
+        line_alpha=0.7,
+    )
+    fig.vbar(
+        x="datetime",
+        width=width,
+        top="open",
+        bottom="close",
+        source=source,
+        line_color="body_color",
+        fill_color="body_color",
+        line_alpha=0.9,
+        fill_alpha=0.9,
+    )
+
+    fig.add_tools(
+        HoverTool(
+            tooltips=[
+                ("时间", "@datetime{%F %H:%M}"),
+                ("开盘", "@open{0.00}"),
+                ("最高", "@high{0.00}"),
+                ("最低", "@low{0.00}"),
+                ("收盘", "@close{0.00}"),
+            ],
+            formatters={"@datetime": "datetime"},
+            mode="vline",
+        )
+    )
+    return fig
+
+
+def build_silver_ma_line_from_dataframe(df: pd.DataFrame) -> Any:
+    """Create a silver-themed MA line figure from a dataframe."""
+    cleaned = _prepare_dataframe(df)
+
+    source = ColumnDataSource(
+        data=dict(
+            datetime=cleaned["datetime"].dt.to_pydatetime().tolist(),
+            value=cleaned["close"].tolist(),
+        )
+    )
+
+    fig = _base_dataframe_figure()
+    fig.line(
+        "datetime",
+        "value",
+        source=source,
+        line_color=LINE_COLOR,
+        line_width=2.8,
+        line_cap="round",
+        line_join="round",
+    )
+
+    fig.add_tools(
+        HoverTool(
+            tooltips=[
+                ("时间", "@datetime{%F %H:%M}"),
+                ("价格", "@value{0.00}"),
+            ],
+            formatters={"@datetime": "datetime"},
+            mode="vline",
+        )
+    )
+    return fig
+
+
+def build_backtest_from_dataframe(
+    df: pd.DataFrame,
+    *,
+    cash: float = 100_000.0,
+    commission: float = 0.0,
+) -> Backtest:
+    """Convert a dataframe into a Backtest using the passive strategy."""
+    cleaned = _prepare_dataframe(df)
+    rename_map = {
+        "datetime": "Date",
+        "open": "Open",
+        "high": "High",
+        "low": "Low",
+        "close": "Close",
+        "volume": "Volume",
+    }
+    bt_df = cleaned.rename(columns=rename_map)
+    if "Volume" not in bt_df.columns:
+        bt_df["Volume"] = cleaned.get("volume", 0)
+    bt_df = bt_df[["Date", "Open", "High", "Low", "Close", "Volume"]]
+    bt_df = bt_df.set_index("Date")
+    bt = Backtest(bt_df, PassiveStrategy, cash=cash, commission=commission)
+    bt.run()
+    return bt
+
+
+def _prepare_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    cleaned = df.copy()
+    cleaned["datetime"] = pd.to_datetime(cleaned["datetime"])
+    cleaned = cleaned.sort_values("datetime").reset_index(drop=True)
+    required = {"open", "high", "low", "close"}
+    missing = required.difference(cleaned.columns)
+    if missing:
+        raise ValueError(f"Missing columns for chart: {', '.join(sorted(missing))}")
+    return cleaned
+
+
+def _base_dataframe_figure() -> Any:
+    fig = figure(
+        x_axis_type="datetime",
+        height=360,
+        sizing_mode="stretch_width",
+        toolbar_location="right",
+    )
+    fig.background_fill_color = BACKGROUND_COLOR
+    fig.border_fill_color = BACKGROUND_COLOR
+    fig.yaxis.axis_label = "Price"
+    fig.xaxis.axis_label = "Time"
+    return fig
+
+
+def _infer_bar_width(datetimes: pd.Series) -> float:
+    if len(datetimes) < 2:
+        return 60_000.0
+    diffs = datetimes.diff().dropna().dt.total_seconds().to_numpy()
+    if len(diffs) == 0:
+        return 60_000.0
+    median_ms = np.median(diffs) * 1000.0
+    return max(median_ms * 0.6, 1.0)
