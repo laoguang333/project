@@ -3,6 +3,9 @@ from __future__ import annotations
 import os
 import sqlite3
 import time
+from datetime import timedelta
+
+CACHE_TIMEZONE = 'Asia/Shanghai'
 from typing import Dict, Optional, Tuple
 import pandas as pd
 
@@ -95,7 +98,10 @@ def fetch_data_with_cache(
     # 1. 优先检查内存缓存
     if CACHE_CONFIG["enabled"] and cache_key in _data_cache:
         cache_time, cached_df = _data_cache[cache_key]
-        if current_time - cache_time < CACHE_CONFIG["memory_cache_timeout_seconds"]:
+        if (
+            current_time - cache_time < CACHE_CONFIG["memory_cache_timeout_seconds"]
+            and not _is_stale(cached_df, timeframe)
+        ):
             if limit and len(cached_df) > limit:
                 return cached_df.tail(limit).copy()
             return cached_df.copy()
@@ -169,6 +175,17 @@ def fetch_data_with_cache(
         df = df.tail(limit)
     
     return df
+
+
+
+def _is_stale(df: pd.DataFrame, timeframe: Timeframe) -> bool:
+    if df.empty:
+        return True
+    last_bar = pd.to_datetime(df['datetime'].iloc[-1]).tz_localize(None)
+    now = pd.Timestamp.now(tz=CACHE_TIMEZONE).tz_localize(None)
+    interval_ms = getattr(timeframe, 'duration_ms', 60_000) or 60_000
+    tolerance = timedelta(milliseconds=interval_ms)
+    return now - last_bar > tolerance
 
 
 def clear_cache(clear_memory: bool = True, clear_sqlite: bool = False) -> None:
