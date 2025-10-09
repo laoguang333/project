@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import backtesting._plotting as plotting
 from backtesting import Backtest, Strategy
-from backtesting.test import GOOG
+from backtesting.test import GOOG, SMA
 
 SILVER_BULL = plotting.RGB(192, 192, 192)
 SILVER_BEAR = plotting.RGB(158, 158, 158)
@@ -26,7 +26,7 @@ class PassiveStrategy(Strategy):
     """占位策略：不做交易，只用于生成基准图表。"""
 
     def init(self) -> None:  # pragma: no cover
-        pass
+        self.ma1 = self.I(SMA, self.data.Close, 1)
 
     def next(self) -> None:  # pragma: no cover
         pass
@@ -451,10 +451,14 @@ def render_native_silver_ma2(bt: Backtest):
     if ohlc_fig is None:
         return fig
 
-    _hide_candles_and_get_source(ohlc_fig)
+    ma_renderers = list(_ma_line_renderers(ohlc_fig))
+    if not ma_renderers:
+        return fig
 
-    ma_updated = False
-    for renderer, glyph in _ma_line_renderers(ohlc_fig):
+    for renderer, _glyph in _candlestick_renderers(ohlc_fig):
+        renderer.visible = False
+
+    for renderer, glyph in ma_renderers:
         glyph.line_color = SILVER_BULL
         glyph.line_width = 2.8
         if hasattr(glyph, 'line_cap'):
@@ -466,8 +470,6 @@ def render_native_silver_ma2(bt: Backtest):
         if hasattr(glyph, 'line_alpha'):
             glyph.line_alpha = 1.0
         renderer.visible = True
-        ma_updated = True
 
-    if ma_updated:
-        _style_price_axis(ohlc_fig)
+    _style_price_axis(ohlc_fig)
     return fig
