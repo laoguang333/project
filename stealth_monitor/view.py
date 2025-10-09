@@ -179,6 +179,33 @@ def render_dotted_ma(bt: Backtest, dash_pattern: Sequence[int], marker_step: int
     return fig
 
 
+def render_native_silver_ma(bt: Backtest):
+    """
+    Modify the Backtest-native plot: hide default candles and overlay a silver MA line.
+    Returns the original layout so auxiliary Backtest panels remain intact.
+    """
+    fig = bt.plot(open_browser=False)
+    ohlc_fig = _find_ohlc_figure(fig.children)
+    if ohlc_fig is None:
+        return fig
+    source = _hide_candles_and_get_source(ohlc_fig)
+    if source is None:
+        return fig
+    _ensure_ma1(source)
+    ohlc_fig.line(
+        "index",
+        "MA1",
+        source=source,
+        line_color=LINE_COLOR,
+        line_width=2.8,
+        line_cap="round",
+        line_join="round",
+        legend_label="MA(1)",
+    )
+    _style_price_axis(ohlc_fig)
+    return fig
+
+
 def build_dotted_ma_figure_from_dataframe(
     df: pd.DataFrame,
     *,

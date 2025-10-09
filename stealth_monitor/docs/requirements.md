@@ -34,3 +34,9 @@
 
 ## 验证流程
 - 运行 `python tools/verify_notebooks.py` 即可通过 nbconvert 执行关键 Notebook（默认涵盖 `testview.ipynb`），用于人工验证展示链路。
+
+## 设计取舍说明
+- 行情渲染采用“Backtest 输出数据 + 自建 Bokeh 样式”的方式：先将 Backtest `_data` 标准化为 dataframe，再由 `render_silver_candles`、`render_ma_line`、`render_dotted_ma` 输出统一银灰主题的三张图。相比直接修改 Backtest 原始 figure，这种做法更易集中控制配色、布局，避免依赖 Backtest 内部 renderer 结构的细节。
+- 若未来需要交易标记或附图，只需在 dataframe 级别扩展渲染逻辑即可；原始 Backtest 图形仍可调用，但默认方案以自定义外观为先，确保在“隐蔽风”场景中输出一致。
+- 混合缓存策略覆写为“一倍周期过期”判断：缓存中若超过一个时间周期未更新，就强制重新拉取 akshare 的整段数据，避免错过最新 K 线。对 5 分钟、30 分钟等周期均适用。
+- Notebook 通过 `tools/verify_notebooks.py` 定期执行验证，确保在当前依赖环境中渲染链路可完整运行；若 akshare 或网络不可用，渲染单元会立即抛出错误提示。

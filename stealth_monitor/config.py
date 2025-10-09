@@ -31,12 +31,12 @@ INSTRUMENTS: List[Instrument] = [
 
 
 TIMEFRAMES: List[Timeframe] = [
-    Timeframe(key="1m", label="1 分钟", category="minute", value="1", duration_ms=60_000),
-    Timeframe(key="5m", label="5 分钟", category="minute", value="5", duration_ms=5 * 60_000),
-    Timeframe(key="15m", label="15 分钟", category="minute", value="15", duration_ms=15 * 60_000),
-    Timeframe(key="30m", label="30 分钟", category="minute", value="30", duration_ms=30 * 60_000),
-    Timeframe(key="60m", label="60 分钟", category="minute", value="60", duration_ms=60 * 60_000),
-    Timeframe(key="1d", label="日线", category="daily", value="daily", duration_ms=24 * 60 * 60_000),
+    Timeframe(key="1m", label="o", category="minute", value="1", duration_ms=60_000),
+    Timeframe(key="5m", label="f", category="minute", value="5", duration_ms=5 * 60_000),
+    Timeframe(key="15m", label="ff", category="minute", value="15", duration_ms=15 * 60_000),
+    Timeframe(key="30m", label="t", category="minute", value="30", duration_ms=30 * 60_000),
+    Timeframe(key="60m", label="s", category="minute", value="60", duration_ms=60 * 60_000),
+    Timeframe(key="1d", label="d", category="daily", value="daily", duration_ms=24 * 60 * 60_000),
 ]
 
 
