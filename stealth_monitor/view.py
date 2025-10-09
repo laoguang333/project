@@ -19,6 +19,8 @@ SILVER_BULL = plotting.RGB(192, 192, 192)
 SILVER_BEAR = plotting.RGB(158, 158, 158)
 LINE_COLOR = "#8C8C8C"
 BACKGROUND_COLOR = "#FFF7E0"
+VOLUME_BAR_COLOR = "#B3B3B3"
+VOLUME_BACKGROUND_COLOR = "#F0F0F0"
 DOTTED_DASH_PATTERN: Sequence[int] = (1, 20)
 DOTTED_MARKER_STEP = 7
 
@@ -68,6 +70,32 @@ def _find_ohlc_figure(children: Iterable) -> Optional[Any]:
     return None
 
 
+def _find_volume_figure(children: Iterable, exclude: Optional[Any] = None) -> Optional[Any]:
+    for row in children:
+        if row is None:
+            continue
+        cells = row if isinstance(row, (list, tuple)) else [row]
+        for cell in cells:
+            if cell is None or cell is exclude or not hasattr(cell, "renderers"):
+                continue
+            yaxes = getattr(cell, 'yaxis', [])
+            for axis in yaxes:
+                axis_label = getattr(axis, 'axis_label', '')
+                if isinstance(axis_label, str) and axis_label.strip().lower() == 'volume':
+                    return cell
+            for renderer in getattr(cell, 'renderers', []):
+                glyph = getattr(renderer, 'glyph', None)
+                if glyph is None or glyph.__class__.__name__ != 'VBar':
+                    continue
+                source = getattr(renderer, 'data_source', None)
+                data = getattr(source, 'data', None)
+                if isinstance(data, dict):
+                    normalized = {str(key).lower() for key in data.keys()}
+                    if 'volume' in normalized:
+                        return cell
+    return None
+
+
 def _ensure_ma1(source: ColumnDataSource) -> None:
     data = dict(source.data)
     if "MA1" in data:
@@ -99,6 +127,27 @@ def _ma_line_renderers(ohlc_fig: Any):
         columns = [str(key).upper() for key in data.keys()]
         if any("SMA" in column or column.startswith("MA(") for column in columns):
             yield renderer, glyph
+
+
+def _style_volume_panel(volume_fig: Any) -> None:
+    volume_fig.background_fill_color = VOLUME_BACKGROUND_COLOR
+    volume_fig.border_fill_color = VOLUME_BACKGROUND_COLOR
+    for axis in getattr(volume_fig, 'yaxis', []):
+        axis.axis_label_text_color = LINE_COLOR
+        axis.major_label_text_color = LINE_COLOR
+    for axis in getattr(volume_fig, 'xaxis', []):
+        axis.major_label_text_color = LINE_COLOR
+    for renderer in getattr(volume_fig, 'renderers', []):
+        glyph = getattr(renderer, 'glyph', None)
+        if glyph is None or glyph.__class__.__name__ != 'VBar':
+            continue
+        if hasattr(glyph, 'fill_color'):
+            glyph.fill_color = VOLUME_BAR_COLOR
+        if hasattr(glyph, 'line_color'):
+            glyph.line_color = VOLUME_BAR_COLOR
+        if hasattr(glyph, 'line_alpha'):
+            glyph.line_alpha = 0.85
+        renderer.visible = True
 
 
 def _style_price_axis(ohlc_fig: Any) -> None:
@@ -203,6 +252,7 @@ def render_native_silver_ma(bt: Backtest):
     ohlc_fig = _find_ohlc_figure(fig.children)
     if ohlc_fig is None:
         return fig
+    volume_fig = _find_volume_figure(fig.children, exclude=ohlc_fig)
     source = _hide_candles_and_get_source(ohlc_fig)
     if source is None:
         return fig
@@ -218,6 +268,8 @@ def render_native_silver_ma(bt: Backtest):
         legend_label="MA(1)",
     )
     _style_price_axis(ohlc_fig)
+    if volume_fig is not None:
+        _style_volume_panel(volume_fig)
     return fig
 
 
@@ -451,6 +503,8 @@ def render_native_silver_ma2(bt: Backtest):
     if ohlc_fig is None:
         return fig
 
+    volume_fig = _find_volume_figure(children, exclude=ohlc_fig)
+
     ma_renderers = list(_ma_line_renderers(ohlc_fig))
     if not ma_renderers:
         return fig
@@ -472,4 +526,6 @@ def render_native_silver_ma2(bt: Backtest):
         renderer.visible = True
 
     _style_price_axis(ohlc_fig)
+    if volume_fig is not None:
+        _style_volume_panel(volume_fig)
     return fig
