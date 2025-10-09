@@ -9,6 +9,7 @@ from bokeh.models import CDSView, ColumnDataSource, HoverTool, IndexFilter
 from bokeh.resources import INLINE
 from bokeh.plotting import figure
 from IPython.display import HTML, display
+from unittest.mock import patch
 
 import backtesting._plotting as plotting
 from backtesting import Backtest, Strategy
@@ -85,12 +86,26 @@ def _hide_candles_and_get_source(ohlc_fig: Any) -> Optional[ColumnDataSource]:
     return source
 
 
+def _ma_line_renderers(ohlc_fig: Any):
+    """Yield registered moving-average line renderers from the OHLC figure."""
+    for renderer in getattr(ohlc_fig, "renderers", []):
+        glyph = getattr(renderer, "glyph", None)
+        if glyph is None or glyph.__class__.__name__ != "Line":
+            continue
+        source = getattr(renderer, "data_source", None)
+        data = getattr(source, "data", None)
+        if not isinstance(data, dict):
+            continue
+        columns = [str(key).upper() for key in data.keys()]
+        if any("SMA" in column or column.startswith("MA(") for column in columns):
+            yield renderer, glyph
+
+
 def _style_price_axis(ohlc_fig: Any) -> None:
     ohlc_fig.background_fill_color = BACKGROUND_COLOR
     ohlc_fig.border_fill_color = BACKGROUND_COLOR
     if ohlc_fig.legend:
         ohlc_fig.legend.visible = False
-
 
 def _draw_dotted_ma(ohlc_fig: Any, source: ColumnDataSource, dash_pattern: Sequence[int], marker_step: int) -> None:
     dash = list(dash_pattern)
@@ -414,3 +429,45 @@ def _infer_bar_width(datetimes: pd.Series) -> float:
         return 60_000.0
     median_ms = np.median(diffs) * 1000.0
     return max(median_ms * 0.6, 1.0)
+
+
+def render_native_silver_ma2(bt: Backtest):
+    """Capture the native Backtest SMA renderer, restyle it, and retain auxiliary panels."""
+    captured = {}
+
+    def _capture(obj, *args, **kwargs):
+        captured['layout'] = obj
+        return obj
+
+    with patch('bokeh.io.show', _capture):
+        layout = bt.plot(open_browser=False)
+
+    fig = captured.get('layout', layout)
+    children = getattr(fig, 'children', None)
+    if children is None:
+        children = [fig]
+
+    ohlc_fig = _find_ohlc_figure(children)
+    if ohlc_fig is None:
+        return fig
+
+    _hide_candles_and_get_source(ohlc_fig)
+
+    ma_updated = False
+    for renderer, glyph in _ma_line_renderers(ohlc_fig):
+        glyph.line_color = SILVER_BULL
+        glyph.line_width = 2.8
+        if hasattr(glyph, 'line_cap'):
+            glyph.line_cap = 'round'
+        if hasattr(glyph, 'line_join'):
+            glyph.line_join = 'round'
+        if hasattr(glyph, 'line_dash'):
+            glyph.line_dash = 'solid'
+        if hasattr(glyph, 'line_alpha'):
+            glyph.line_alpha = 1.0
+        renderer.visible = True
+        ma_updated = True
+
+    if ma_updated:
+        _style_price_axis(ohlc_fig)
+    return fig
