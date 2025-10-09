@@ -21,6 +21,7 @@ LINE_COLOR = "#8C8C8C"
 BACKGROUND_COLOR = "#FFF7E0"
 VOLUME_BAR_COLOR = "#B3B3B3"
 VOLUME_BACKGROUND_COLOR = "#F0F0F0"
+NATIVE_MA_DOT_SIZE = 6.0
 DOTTED_DASH_PATTERN: Sequence[int] = (1, 20)
 DOTTED_MARKER_STEP = 7
 
@@ -524,6 +525,71 @@ def render_native_silver_ma2(bt: Backtest):
         if hasattr(glyph, 'line_alpha'):
             glyph.line_alpha = 1.0
         renderer.visible = True
+
+    _style_price_axis(ohlc_fig)
+    if volume_fig is not None:
+        _style_volume_panel(volume_fig)
+    return fig
+
+
+def render_native_dotted_ma(bt: Backtest):
+    """Render Backtest SMA as dotted markers using native indicator data."""
+    captured: dict[str, Any] = {}
+
+    def _capture(obj, *args, **kwargs):
+        captured['layout'] = obj
+        return obj
+
+    with patch('bokeh.io.show', _capture):
+        layout = bt.plot(open_browser=False)
+
+    fig = captured.get('layout', layout)
+    children = getattr(fig, 'children', None)
+    if children is None:
+        children = [fig]
+
+    ohlc_fig = _find_ohlc_figure(children)
+    if ohlc_fig is None:
+        return fig
+
+    volume_fig = _find_volume_figure(children, exclude=ohlc_fig)
+
+    ma_renderers = list(_ma_line_renderers(ohlc_fig))
+    if not ma_renderers:
+        return fig
+
+    for renderer, _glyph in _candlestick_renderers(ohlc_fig):
+        renderer.visible = False
+
+    legend_added = False
+    for renderer, glyph in ma_renderers:
+        renderer.visible = False
+        source = getattr(renderer, 'data_source', None)
+        if source is None:
+            continue
+        x_field = getattr(glyph, 'x', None)
+        y_field = getattr(glyph, 'y', None)
+        if not isinstance(x_field, str):
+            x_field = 'index'
+        if not isinstance(y_field, str):
+            columns = list(getattr(source, 'data', {}).keys())
+            sma_columns = [col for col in columns if str(col).upper().startswith('SMA') or str(col).upper().startswith('MA(')]
+            if sma_columns:
+                y_field = sma_columns[0]
+            else:
+                continue
+        legend = 'MA(1)' if not legend_added else None
+        ohlc_fig.scatter(
+            x_field,
+            y_field,
+            source=source,
+            size=NATIVE_MA_DOT_SIZE,
+            color=SILVER_BULL,
+            line_color=SILVER_BULL,
+            fill_color=SILVER_BULL,
+            legend_label=legend,
+        )
+        legend_added = legend_added or legend is not None
 
     _style_price_axis(ohlc_fig)
     if volume_fig is not None:
