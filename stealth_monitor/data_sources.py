@@ -16,6 +16,10 @@ except ImportError as exc:  # pragma: no cover - optional dependency
 from .config import Instrument, Timeframe
 
 
+class DataFetchError(RuntimeError):
+    """Raised when live market data cannot be retrieved."""
+
+
 def fetch_data(
     instrument: Instrument,
     timeframe: Timeframe,
@@ -29,7 +33,7 @@ def fetch_data(
             "akshare 未安装或导入失败，无法获取真实行情数据。"
             "请先运行 `pip install akshare` 并确保网络可用。"
         )
-        raise RuntimeError(message) from _AK_IMPORT_ERROR
+        raise DataFetchError(message) from _AK_IMPORT_ERROR
 
     if instrument.kind == "futures":
         if timeframe.category == "minute":
@@ -45,8 +49,12 @@ def fetch_data(
         raise ValueError(f"Unsupported instrument kind: {instrument.kind}")
 
     df = _normalize_dataframe(df, timeframe)
+    if df.empty:
+        raise DataFetchError(f"No market data returned for {instrument.label} {timeframe.label}")
     if limit:
         df = df.tail(limit)
+    if df.empty:
+        raise DataFetchError(f"Tail trimming removed all rows for {instrument.label} {timeframe.label}")
     return df
 
 

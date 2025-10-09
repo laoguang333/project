@@ -90,7 +90,7 @@ def fetch_data_with_cache(
     # 导入原函数以避免代码复制
 ) -> pd.DataFrame:
     """Return OHLCV dataframe with hybrid caching support."""
-    from .data_sources import fetch_data as original_fetch_data
+    from .data_sources import fetch_data as original_fetch_data, DataFetchError
     
     cache_key = (instrument.key, timeframe.key, adjust)
     current_time = time.time()
@@ -121,22 +121,26 @@ def fetch_data_with_cache(
             conn.close()
             
             if not df_sqlite.empty:
-                # 转换datetime列
                 df_sqlite['datetime'] = pd.to_datetime(df_sqlite['datetime'])
-                # 排序
                 df_sqlite = df_sqlite.sort_values('datetime')
-                # 存入内存缓存
-                if CACHE_CONFIG["enabled"]:
-                    _data_cache[cache_key] = (current_time, df_sqlite.copy())
-                # 返回数据
-                if limit and len(df_sqlite) > limit:
-                    return df_sqlite.tail(limit).copy()
-                return df_sqlite.copy()
+                if not _is_stale(df_sqlite, timeframe):
+                    if CACHE_CONFIG["enabled"]:
+                        _data_cache[cache_key] = (current_time, df_sqlite.copy())
+                    if limit and len(df_sqlite) > limit:
+                        return df_sqlite.tail(limit).copy()
+                    return df_sqlite.copy()
         except Exception as e:
             print(f"SQLite缓存读取失败: {e}")
     
     # 3. 调用原函数获取新数据
     df = original_fetch_data(instrument, timeframe, limit=None, adjust=adjust)
+    if df.empty:
+        raise DataFetchError(f"Live feed returned no rows for {instrument.label} {timeframe.label}")
+    if _is_stale(df, timeframe):
+        raise DataFetchError(
+            f"Latest bar {pd.to_datetime(df['datetime'].iloc[-1])} is older than tolerance; night session data is unavailable"
+        )
+
     
     # 4. 更新SQLite缓存
     if CACHE_CONFIG["sqlite_cache_enabled"] and not df.empty:
