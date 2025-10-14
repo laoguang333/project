@@ -1,0 +1,55 @@
+{
+  "name": "stealth-monitor-notebook-tools",
+  "displayName": "Stealth Monitor Notebook Tools",
+  "description": "为 VS Code 中的 Jupyter 笔记本添加运行特定单元格的快捷按钮。",
+  "version": "0.0.1",
+  "publisher": "stealth-monitor",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.78.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onNotebook:jupyter-notebook"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "stealthMonitor.runTwoCells",
+        "title": "运行两个步骤",
+        "category": "Stealth Monitor",
+        "icon": "$(run-all)"
+      }
+    ],
+    "configuration": {
+      "title": "Stealth Monitor Notebook Tools",
+      "properties": {
+        "stealthMonitorJupyter.targetCells": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "default": [],
+          "description": "要执行的 Jupyter 单元格索引（从 0 开始）。留空时将使用带有 metadata stealthRunOrder 的单元格。"
+        }
+      }
+    },
+    "notebookToolbar": [
+      {
+        "viewType": "jupyter-notebook",
+        "command": "stealthMonitor.runTwoCells",
+        "group": "navigation@90",
+        "when": "resourceExtname == .ipynb"
+      }
+    ]
+  },
+  "scripts": {
+    "lint": "echo \"No lint configured\"",
+    "compile": "echo \"Using plain JS, no build step\""
+  },
+  "devDependencies": {}
+}
