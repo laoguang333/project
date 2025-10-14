@@ -24,7 +24,11 @@ class Timeframe:
 
 
 INSTRUMENTS: List[Instrument] = [
-    Instrument(key="PVC", label="PVC )", kind="futures", symbol="v0"),
+    Instrument(key="PVC", label="PVC)", kind="futures", symbol="v0"),
+    Instrument(key="FU", label="ry", kind="futures", symbol="fu0"),
+    Instrument(key="B", label="de", kind="futures", symbol="b0"),
+    Instrument(key="SR", label="bt", kind="futures", symbol="sr0"),
+    Instrument(key="BU", label="lq", kind="futures", symbol="bu0"),
     Instrument(key="L", label="L", kind="futures", symbol="l0"),
     Instrument(key="MOUTAI", label="mt", kind="stock", symbol="sh600519"),
 ]
