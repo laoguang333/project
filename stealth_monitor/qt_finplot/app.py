@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, Tuple
 
+import numpy as np
 import pandas as pd
 from PyQt6 import QtCore, QtGui, QtWidgets
 
@@ -22,11 +23,11 @@ from ..config import INSTRUMENTS, Instrument
 from ..notebook_utils import TimeframePlan, load_market_data
 
 # Palette tuned for a low-key, silver themed appearance.
-FOREGROUND_COLOR = "#C8C8C8"
-BACKGROUND_COLOR = "#101013"
-MA_LINE_COLOR = "#D0D0D0"
-CANDLE_MUTED_COLOR = "#4A4A4A"
-CANDLE_MUTED_ALPHA = 85
+FOREGROUND_COLOR = "#c0c0c0"
+BACKGROUND_COLOR = "#fff7e0"
+MA_LINE_COLOR = "#c0c0c0"
+CANDLE_MUTED_COLOR = "#909090"
+CANDLE_MUTED_ALPHA = 25
 
 
 def _build_timeframe_config() -> Dict[str, Tuple[str, TimeframePlan]]:
@@ -100,6 +101,8 @@ class ChartPane:
 
         self.widget = pg.GraphicsLayoutWidget(master)
         self.widget.setContentsMargins(0, 0, 0, 0)
+        if hasattr(self.widget, "setBackground"):
+            self.widget.setBackground(BACKGROUND_COLOR)
 
         axes = fplt.create_plot_widget(
             master=self.widget,
@@ -117,6 +120,7 @@ class ChartPane:
             self.widget.addItem(self.ax)
 
         self.ax.showGrid(x=False, y=False)
+        self.ax.vb.setBackgroundColor(BACKGROUND_COLOR)
         axis_pen = pg.mkPen(color=FOREGROUND_COLOR, width=1)
         for axis_key in ("bottom", "right"):
             axis = self.ax.getAxis(axis_key)
@@ -145,6 +149,10 @@ class ChartPane:
                 pass
             self._candle_handle = None
             needs_refresh = True
+        # reset datasrc so next draw can auto-rescale
+        self.ax.vb.set_datasrc(None)
+        self.ax.vb.v_autozoom = True
+        self.ax.vb.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
         if needs_refresh:
             fplt.refresh()
 
@@ -153,11 +161,9 @@ class ChartPane:
         if df.empty:
             return
 
-        candles = df[["datetime", "open", "close", "high", "low"]].copy()
-        candles["datetime"] = pd.to_datetime(candles["datetime"])
+        candles = df[["open", "close", "high", "low"]].copy()
         candles = candles.reset_index(drop=True)
-        candles.insert(0, "time", candles.index.astype(float))
-        candles = candles[["time", "open", "close", "high", "low", "datetime"]]
+        candles.insert(0, "time", np.arange(len(candles), dtype=float))
 
         self._candle_handle = fplt.candlestick_ochl(
             candles,
@@ -175,13 +181,25 @@ class ChartPane:
             fplt.refresh()
             return
 
+        ma_series.index = candles["time"]
+
         self._ma_handle = fplt.plot(
             ma_series.astype(float),
             ax=self.ax,
             color=MA_LINE_COLOR,
             legend="MA(1)",
-            width=2,
+            width=3.2,
         )
+        if self._ma_handle is not None:
+            self._ma_handle.setPen(
+                pg.mkPen(
+                    color=MA_LINE_COLOR,
+                    width=3.2,
+                    cap=QtCore.Qt.PenCapStyle.RoundCap,
+                    join=QtCore.Qt.PenJoinStyle.RoundJoin,
+                )
+            )
+        self.ax.vb.updateAutoRange()
         fplt.refresh()
 
 
