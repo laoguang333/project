@@ -2,8 +2,8 @@
 __pycache__/
 *.py[cod]
 *$py.class
-
-
+*.whl
+tmp_finplot/
 # Virtual environments
 .venv/
 venv/
