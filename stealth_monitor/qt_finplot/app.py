@@ -22,12 +22,95 @@ import pyqtgraph as pg
 from ..config import INSTRUMENTS, Instrument
 from ..notebook_utils import TimeframePlan, load_market_data
 
-# Palette tuned for a low-key, silver themed appearance.
-FOREGROUND_COLOR = "#c0c0c0"
-BACKGROUND_COLOR = "#fff7e0"
-MA_LINE_COLOR = "#c0c0c0"
-CANDLE_MUTED_COLOR = "#909090"
-CANDLE_MUTED_ALPHA = 25
+# VS Code inspired palette.
+FOREGROUND_COLOR = "#CCCCCC"
+BACKGROUND_COLOR = "#1E1E1E"
+PANEL_BACKGROUND_COLOR = "#252526"
+ACCENT_COLOR = "#0E639C"
+MA_LINE_COLOR = "#C0C0C0"
+CANDLE_MUTED_COLOR = "#3A3D41"
+CANDLE_MUTED_ALPHA = 85
+STATUS_BAR_COLOR = "#007ACC"
+RESIZE_MARGIN = 6
+
+APP_STYLESHEET = f"""
+QWidget {{
+    background-color: {BACKGROUND_COLOR};
+    color: {FOREGROUND_COLOR};
+    font-family: "Cascadia Code", "Consolas", "Segoe UI", monospace;
+    font-size: 12px;
+}}
+
+QWidget#TitleBar {{
+    background-color: #2D2D2D;
+    border-radius: 6px 6px 0 0;
+}}
+
+QFrame#ContentFrame {{
+    background-color: {PANEL_BACKGROUND_COLOR};
+    border: 1px solid #3C3C3C;
+    border-radius: 6px;
+}}
+
+QLabel#StatusLabel {{
+    background-color: #1B1D21;
+    padding: 6px 10px;
+    color: {STATUS_BAR_COLOR};
+}}
+
+QLabel.section-title {{
+    color: #AEAFAD;
+    font-size: 11px;
+}}
+
+QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit {{
+    background-color: #2D2D30;
+    border: 1px solid #3C3C3C;
+    border-radius: 4px;
+    padding: 3px 8px;
+}}
+
+QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover, QLineEdit:hover {{
+    border-color: {ACCENT_COLOR};
+}}
+
+QComboBox::drop-down {{
+    border: none;
+}}
+
+QPushButton {{
+    background-color: #2D2D30;
+    border: 1px solid #3C3C3C;
+    border-radius: 4px;
+    padding: 4px 12px;
+    color: {FOREGROUND_COLOR};
+}}
+
+QPushButton:hover {{
+    border-color: {ACCENT_COLOR};
+}}
+
+QPushButton:pressed {{
+    background-color: #1F2327;
+}}
+
+QPushButton#TitleBarButton {{
+    background-color: transparent;
+    border: none;
+    padding: 6px 10px;
+    color: #BBBBBB;
+}}
+
+QPushButton#TitleBarButton:hover {{
+    background-color: rgba(14, 99, 156, 0.25);
+    color: {FOREGROUND_COLOR};
+}}
+
+QPushButton#CloseButton:hover {{
+    background-color: #C75450;
+    color: white;
+}}
+"""
 
 
 def _build_timeframe_config() -> Dict[str, Tuple[str, TimeframePlan]]:
@@ -91,18 +174,94 @@ class DataAdaptor:
         return ma.dropna()
 
 
+class TitleBar(QtWidgets.QWidget):
+    """Custom frameless title bar styled like VS Code."""
+
+    HEIGHT = 34
+
+    def __init__(self, window: QtWidgets.QWidget) -> None:
+        super().__init__(window)
+        self._window = window
+        self._drag_pos: QtCore.QPoint | None = None
+
+        self.setObjectName("TitleBar")
+        self.setFixedHeight(self.HEIGHT)
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(12, 0, 6, 0)
+        layout.setSpacing(6)
+
+        title_label = QtWidgets.QLabel("Stealth Monitor MA1", self)
+        title_label.setProperty("class", "section-title")
+        layout.addWidget(title_label)
+        layout.addStretch(1)
+
+        self.min_button = self._create_button("—", "最小化")
+        self.max_button = self._create_button("□", "最大化")
+        self.close_button = self._create_button("✕", "关闭")
+        self.close_button.setObjectName("CloseButton")
+
+        for btn in (self.min_button, self.max_button, self.close_button):
+            layout.addWidget(btn)
+
+        self.min_button.clicked.connect(self._window.showMinimized)
+        self.max_button.clicked.connect(self._toggle_max_restore)
+        self.close_button.clicked.connect(self._window.close)
+
+    def _create_button(self, text: str, tooltip: str) -> QtWidgets.QPushButton:
+        btn = QtWidgets.QPushButton(text, self)
+        btn.setObjectName("TitleBarButton")
+        btn.setFixedSize(32, 24)
+        btn.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        btn.setToolTip(tooltip)
+        return btn
+
+    def _toggle_max_restore(self) -> None:
+        if self._window.isMaximized():
+            self._window.showNormal()
+            self.max_button.setText("□")
+            self.max_button.setToolTip("最大化")
+        else:
+            self._window.showMaximized()
+            self.max_button.setText("❐")
+            self.max_button.setToolTip("还原")
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint() - self._window.frameGeometry().topLeft()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
+        if self._drag_pos is not None and event.buttons() & QtCore.Qt.MouseButton.LeftButton:
+            self._window.move(event.globalPosition().toPoint() - self._drag_pos)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
+        self._drag_pos = None
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent) -> None:
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self._toggle_max_restore()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
 class ChartPane:
     """Wrapper around a single finplot axis embedded in a Qt widget."""
 
     def __init__(self, master: QtWidgets.QWidget, *, history_limit: int, ma_period: int) -> None:
         fplt.foreground = FOREGROUND_COLOR
-        fplt.background = BACKGROUND_COLOR
-        fplt.odd_plot_background = BACKGROUND_COLOR
+        fplt.background = PANEL_BACKGROUND_COLOR
+        fplt.odd_plot_background = PANEL_BACKGROUND_COLOR
 
         self.widget = pg.GraphicsLayoutWidget(master)
         self.widget.setContentsMargins(0, 0, 0, 0)
         if hasattr(self.widget, "setBackground"):
-            self.widget.setBackground(BACKGROUND_COLOR)
+            self.widget.setBackground(PANEL_BACKGROUND_COLOR)
 
         axes = fplt.create_plot_widget(
             master=self.widget,
@@ -120,7 +279,7 @@ class ChartPane:
             self.widget.addItem(self.ax)
 
         self.ax.showGrid(x=False, y=False)
-        self.ax.vb.setBackgroundColor(BACKGROUND_COLOR)
+        self.ax.vb.setBackgroundColor(PANEL_BACKGROUND_COLOR)
         axis_pen = pg.mkPen(color=FOREGROUND_COLOR, width=1)
         for axis_key in ("bottom", "right"):
             axis = self.ax.getAxis(axis_key)
@@ -223,24 +382,69 @@ class StealthMainWindow(QtWidgets.QMainWindow):
 
         self.setWindowTitle("Stealth Monitor MA1")
         self.resize(1000, 640)
+        self.setWindowFlags(
+            QtCore.Qt.WindowType.FramelessWindowHint
+            | QtCore.Qt.WindowType.WindowSystemMenuHint
+            | QtCore.Qt.WindowType.WindowMinMaxButtonsHint
+        )
+        self.setStyleSheet(APP_STYLESHEET)
+        self.setMinimumSize(720, 420)
 
         central = QtWidgets.QWidget(self)
         self.setCentralWidget(central)
-        layout = QtWidgets.QVBoxLayout(central)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
+        outer_layout = QtWidgets.QVBoxLayout(central)
+        outer_layout.setContentsMargins(12, 12, 12, 12)
+        outer_layout.setSpacing(8)
 
-        layout.addLayout(self._build_control_row())
+        self.title_bar = TitleBar(self)
+        outer_layout.addWidget(self.title_bar)
+
+        content_frame = QtWidgets.QFrame(self)
+        content_frame.setObjectName("ContentFrame")
+        content_layout = QtWidgets.QVBoxLayout(content_frame)
+        content_layout.setContentsMargins(18, 18, 18, 14)
+        content_layout.setSpacing(14)
+        outer_layout.addWidget(content_frame, 1)
+
+        content_layout.addLayout(self._build_control_row())
 
         self.chart = ChartPane(
             self,
             history_limit=self.adaptor.history_limit,
             ma_period=self.adaptor.ma_period,
         )
-        layout.addWidget(self.chart.widget)
+        content_layout.addWidget(self.chart.widget, 1)
 
+        status_bar = QtWidgets.QHBoxLayout()
+        status_bar.setContentsMargins(0, 0, 0, 0)
+        status_bar.setSpacing(0)
         self.status_label = QtWidgets.QLabel("等待刷新...", self)
-        layout.addWidget(self.status_label)
+        self.status_label.setObjectName("StatusLabel")
+        status_bar.addWidget(self.status_label)
+        status_bar.addStretch(1)
+        content_layout.addLayout(status_bar)
+
+        grip_layout = QtWidgets.QHBoxLayout()
+        grip_layout.setContentsMargins(0, 0, 0, 0)
+        grip_layout.addStretch(1)
+        self.size_grip = QtWidgets.QSizeGrip(self)
+        self.size_grip.setFixedSize(16, 16)
+        self.size_grip.setStyleSheet("background-color: transparent;")
+        grip_layout.addWidget(self.size_grip)
+        content_layout.addLayout(grip_layout)
+
+        # Resize handling state
+        self._resize_edge = QtCore.Qt.Edge(0)
+        self._is_resizing = False
+        self._resize_start_rect: QtCore.QRect | None = None
+        self._resize_start_pos: QtCore.QPoint | None = None
+
+        # Enable mouse tracking for resizing detection
+        self.setMouseTracking(True)
+        for widget in (central, content_frame, self.title_bar, self):
+            widget.setMouseTracking(True)
+        for widget in (central, content_frame, self.title_bar, self.chart.widget):
+            widget.installEventFilter(self)
 
         self._timer = QtCore.QTimer(self)
         self._timer.setInterval(self.refresh_interval_ms)
@@ -251,7 +455,8 @@ class StealthMainWindow(QtWidgets.QMainWindow):
 
     def _build_control_row(self) -> QtWidgets.QLayout:
         row = QtWidgets.QHBoxLayout()
-        row.setSpacing(10)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(12)
 
         self.instrument_combo = QtWidgets.QComboBox(self)
         for instrument in INSTRUMENTS:
@@ -282,7 +487,9 @@ class StealthMainWindow(QtWidgets.QMainWindow):
         layout = QtWidgets.QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
-        layout.addWidget(QtWidgets.QLabel(text, container))
+        label = QtWidgets.QLabel(text, container)
+        label.setProperty("class", "section-title")
+        layout.addWidget(label)
         layout.addWidget(widget)
         return container
 
@@ -327,6 +534,148 @@ class StealthMainWindow(QtWidgets.QMainWindow):
         except Exception as exc:  # pragma: no cover - defensive path
             self.chart.clear()
             self.status_label.setText(f"刷新失败: {exc}")
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if self.isMaximized():
+            self.title_bar.max_button.setText("❐")
+            self.title_bar.max_button.setToolTip("还原")
+        else:
+            self.title_bar.max_button.setText("□")
+            self.title_bar.max_button.setToolTip("最大化")
+
+    # --- Resize helpers -------------------------------------------------
+
+    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        if isinstance(event, QtGui.QMouseEvent):
+            if event.type() == QtCore.QEvent.Type.MouseMove:
+                return self._handle_mouse_move(event, obj)
+            if event.type() == QtCore.QEvent.Type.MouseButtonPress:
+                return self._handle_mouse_press(event, obj)
+            if event.type() == QtCore.QEvent.Type.MouseButtonRelease:
+                return self._handle_mouse_release(event, obj)
+        return super().eventFilter(obj, event)
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
+        if not self._handle_mouse_press(event, self):
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
+        if not self._handle_mouse_move(event, self):
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
+        if not self._handle_mouse_release(event, self):
+            super().mouseReleaseEvent(event)
+
+    def _handle_mouse_press(self, event: QtGui.QMouseEvent, widget: QtCore.QObject) -> bool:
+        if event.button() != QtCore.Qt.MouseButton.LeftButton or self.isMaximized():
+            return False
+        window_pos = self._map_to_window(widget, event.position())
+        edge = self._detect_resize_edge(window_pos)
+        if edge == QtCore.Qt.Edge(0):
+            return False
+        self._is_resizing = True
+        self._resize_edge = edge
+        self._resize_start_pos = event.globalPosition().toPoint()
+        self._resize_start_rect = self.geometry()
+        event.accept()
+        return True
+
+    def _handle_mouse_move(self, event: QtGui.QMouseEvent, widget: QtCore.QObject) -> bool:
+        window_pos = self._map_to_window(widget, event.position())
+        if self._is_resizing and self._resize_start_rect and self._resize_start_pos:
+            self._perform_resize(event.globalPosition().toPoint())
+            event.accept()
+            return True
+        if self.isMaximized():
+            self.unsetCursor()
+            return False
+        edge = self._detect_resize_edge(window_pos)
+        self._apply_resize_cursor(edge)
+        return False
+
+    def _handle_mouse_release(self, event: QtGui.QMouseEvent, widget: QtCore.QObject) -> bool:
+        if event.button() != QtCore.Qt.MouseButton.LeftButton:
+            return False
+        if self._is_resizing:
+            self._is_resizing = False
+            self._resize_edge = QtCore.Qt.Edge(0)
+            self._resize_start_rect = None
+            self._resize_start_pos = None
+            self.unsetCursor()
+            event.accept()
+            return True
+        return False
+
+    def _map_to_window(self, widget: QtCore.QObject, pos: QtCore.QPointF) -> QtCore.QPoint:
+        if widget is self:
+            return QtCore.QPoint(round(pos.x()), round(pos.y()))
+        if isinstance(widget, QtWidgets.QWidget):
+            return widget.mapTo(self, QtCore.QPoint(round(pos.x()), round(pos.y())))
+        return QtCore.QPoint(round(pos.x()), round(pos.y()))
+
+    def _detect_resize_edge(self, pos: QtCore.QPoint) -> QtCore.Qt.Edge:
+        rect = self.rect()
+        edges = QtCore.Qt.Edge(0)
+        if pos.x() <= RESIZE_MARGIN:
+            edges |= QtCore.Qt.Edge.LeftEdge
+        if pos.x() >= rect.width() - RESIZE_MARGIN:
+            edges |= QtCore.Qt.Edge.RightEdge
+        if pos.y() <= RESIZE_MARGIN:
+            edges |= QtCore.Qt.Edge.TopEdge
+        if pos.y() >= rect.height() - RESIZE_MARGIN:
+            edges |= QtCore.Qt.Edge.BottomEdge
+        return edges
+
+    def _apply_resize_cursor(self, edges: QtCore.Qt.Edge) -> None:
+        if edges == QtCore.Qt.Edge(0):
+            self.unsetCursor()
+            return
+        if edges in (
+            QtCore.Qt.Edge.LeftEdge | QtCore.Qt.Edge.TopEdge,
+            QtCore.Qt.Edge.RightEdge | QtCore.Qt.Edge.BottomEdge,
+        ):
+            self.setCursor(QtCore.Qt.CursorShape.SizeFDiagCursor)
+        elif edges in (
+            QtCore.Qt.Edge.RightEdge | QtCore.Qt.Edge.TopEdge,
+            QtCore.Qt.Edge.LeftEdge | QtCore.Qt.Edge.BottomEdge,
+        ):
+            self.setCursor(QtCore.Qt.CursorShape.SizeBDiagCursor)
+        elif edges & (QtCore.Qt.Edge.LeftEdge | QtCore.Qt.Edge.RightEdge):
+            self.setCursor(QtCore.Qt.CursorShape.SizeHorCursor)
+        elif edges & (QtCore.Qt.Edge.TopEdge | QtCore.Qt.Edge.BottomEdge):
+            self.setCursor(QtCore.Qt.CursorShape.SizeVerCursor)
+
+    def _perform_resize(self, global_pos: QtCore.QPoint) -> None:
+        if not self._resize_start_rect or not self._resize_start_pos:
+            return
+        rect = QtCore.QRect(self._resize_start_rect)
+        delta = global_pos - self._resize_start_pos
+
+        if self._resize_edge & QtCore.Qt.Edge.LeftEdge:
+            rect.setLeft(rect.left() + delta.x())
+        if self._resize_edge & QtCore.Qt.Edge.RightEdge:
+            rect.setRight(rect.right() + delta.x())
+        if self._resize_edge & QtCore.Qt.Edge.TopEdge:
+            rect.setTop(rect.top() + delta.y())
+        if self._resize_edge & QtCore.Qt.Edge.BottomEdge:
+            rect.setBottom(rect.bottom() + delta.y())
+
+        min_w = self.minimumWidth()
+        min_h = self.minimumHeight()
+        if rect.width() < min_w:
+            if self._resize_edge & QtCore.Qt.Edge.LeftEdge:
+                rect.setLeft(rect.right() - min_w)
+            else:
+                rect.setRight(rect.left() + min_w)
+        if rect.height() < min_h:
+            if self._resize_edge & QtCore.Qt.Edge.TopEdge:
+                rect.setTop(rect.bottom() - min_h)
+            else:
+                rect.setBottom(rect.top() + min_h)
+
+        self.setGeometry(rect.normalized())
 
 
 def run() -> None:
