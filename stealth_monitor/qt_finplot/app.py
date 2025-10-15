@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import QSystemTrayIcon, QMenu
 from config import INSTRUMENTS, Instrument
 from notebook_utils import TimeframePlan, load_market_data
 from .single_instance import release_single_instance
+from .custom_combo import CircularComboBox
 
 # VS Code inspired palette.
 FOREGROUND_COLOR = "#CCCCCC"
@@ -484,13 +485,13 @@ class StealthMainWindow(QtWidgets.QMainWindow):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(12)
 
-        self.instrument_combo = QtWidgets.QComboBox(self)
+        self.instrument_combo = CircularComboBox(self)
         for instrument in INSTRUMENTS:
             self.instrument_combo.addItem(instrument.label, instrument.key)
         self.instrument_combo.currentIndexChanged.connect(self._on_selection_changed)
         row.addWidget(self._wrap_with_label("品种", self.instrument_combo))
 
-        self.timeframe_combo = QtWidgets.QComboBox(self)
+        self.timeframe_combo = CircularComboBox(self)
         for key, (label, _plan) in TIMEFRAME_CONFIG.items():
             self.timeframe_combo.addItem(label, key)
         self.timeframe_combo.currentIndexChanged.connect(self._on_selection_changed)
