@@ -8,6 +8,10 @@ falling back to pandas rolling windows if finplot does not expose the helper.
 from __future__ import annotations
 
 import sys
+import os
+# 添加项目根目录到Python路径
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, Tuple
@@ -18,9 +22,10 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 
 import finplot as fplt
 import pyqtgraph as pg
+from PyQt6.QtWidgets import QSystemTrayIcon, QMenu
 
-from ..config import INSTRUMENTS, Instrument
-from ..notebook_utils import TimeframePlan, load_market_data
+from config import INSTRUMENTS, Instrument
+from notebook_utils import TimeframePlan, load_market_data
 
 # VS Code inspired palette.
 FOREGROUND_COLOR = "#CCCCCC"
@@ -446,6 +451,26 @@ class StealthMainWindow(QtWidgets.QMainWindow):
         for widget in (central, content_frame, self.title_bar, self.chart.widget):
             widget.installEventFilter(self)
 
+        # 系统托盘功能
+        self.tray_icon = None
+        self._setup_tray_icon()
+        
+        # 鼠标静止检测功能
+        self.mouse_idle_timer = QtCore.QTimer(self)
+        self.mouse_idle_timer.setInterval(20000)  # 20秒
+        self.mouse_idle_timer.timeout.connect(self._on_mouse_idle)
+        self.mouse_idle_enabled = False  # 默认关闭自动托盘功能
+        self.last_mouse_pos = None
+        
+        # 添加自动托盘功能开关按钮到控制行
+        self.auto_tray_button = QtWidgets.QPushButton("启用自动托盘", self)
+        self.auto_tray_button.setCheckable(True)
+        self.auto_tray_button.toggled.connect(self._toggle_auto_tray)
+        
+        # 获取已创建的控制行并添加自动托盘按钮
+        control_row = content_layout.itemAt(0).layout()  # 获取已存在的控制行
+        control_row.addWidget(self.auto_tray_button)
+
         self._timer = QtCore.QTimer(self)
         self._timer.setInterval(self.refresh_interval_ms)
         self._timer.timeout.connect(self.refresh_chart)
@@ -676,6 +701,102 @@ class StealthMainWindow(QtWidgets.QMainWindow):
                 rect.setBottom(rect.top() + min_h)
 
         self.setGeometry(rect.normalized())
+
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        """重写关闭事件，将窗口隐藏而不是关闭"""
+        if self.tray_icon and self.tray_icon.isVisible():
+            self.hide()  # 隐藏窗口而不是关闭
+            event.ignore()  # 忽略关闭事件
+        else:
+            super().closeEvent(event)
+
+    def _setup_tray_icon(self) -> None:
+        """设置系统托盘图标"""
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+            
+        # 创建系统托盘图标
+        self.tray_icon = QSystemTrayIcon(self)
+        
+        # 设置托盘图标（这里使用应用程序图标，如果有的话）
+        # 如果没有特定图标，可以使用默认图标
+        self.tray_icon.setIcon(self.style().standardIcon(QtWidgets.QStyle.StandardPixmap.SP_ComputerIcon))
+        
+        # 创建托盘菜单
+        tray_menu = QMenu(self)
+        
+        # 添加显示/隐藏选项
+        show_action = tray_menu.addAction("显示")
+        show_action.triggered.connect(self.showNormal)
+        
+        # 添加退出选项
+        quit_action = tray_menu.addAction("退出")
+        quit_action.triggered.connect(self._quit_application)
+        
+        self.tray_icon.setContextMenu(tray_menu)
+        
+        # 连接托盘图标激活信号
+        self.tray_icon.activated.connect(self._on_tray_icon_activated)
+        
+        # 显示托盘图标
+        self.tray_icon.show()
+
+    def _on_tray_icon_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        """处理托盘图标被点击的事件"""
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            # 单击托盘图标时切换窗口显示状态
+            if self.isVisible():
+                self.hide()
+            else:
+                self.showNormal()
+
+    def _quit_application(self) -> None:
+        """退出应用程序"""
+        # 先隐藏托盘图标再退出应用
+        if self.tray_icon:
+            self.tray_icon.hide()
+        QtWidgets.QApplication.quit()
+
+    def _toggle_auto_tray(self, checked: bool) -> None:
+        """切换自动托盘功能"""
+        self.mouse_idle_enabled = checked
+        if checked:
+            self.auto_tray_button.setText("禁用自动托盘")
+            # 启动鼠标监控
+            self.installEventFilter(self)
+            self.mouse_idle_timer.start()
+            # 初始化鼠标位置
+            self.last_mouse_pos = QtGui.QCursor.pos()
+        else:
+            self.auto_tray_button.setText("启用自动托盘")
+            # 停止鼠标监控
+            self.removeEventFilter(self)
+            self.mouse_idle_timer.stop()
+
+    def _on_mouse_idle(self) -> None:
+        """鼠标静止超时处理"""
+        if self.mouse_idle_enabled and self.isVisible():
+            # 检查鼠标位置是否变化
+            cursor_pos = QtGui.QCursor.pos()
+            if self.last_mouse_pos is None or self.last_mouse_pos != cursor_pos:
+                self.last_mouse_pos = cursor_pos
+                # 重启计时器
+                self.mouse_idle_timer.start()
+            else:
+                # 鼠标静止超过20秒，隐藏窗口到托盘
+                self.hide()
+                # 重置位置以避免立即触发
+                self.last_mouse_pos = cursor_pos
+
+    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        """事件过滤器，用于监控鼠标活动"""
+        if self.mouse_idle_enabled and isinstance(event, QtGui.QMouseEvent):
+            # 有任何鼠标活动都重置计时器
+            self.mouse_idle_timer.start()
+            self.last_mouse_pos = QtGui.QCursor.pos()
+            
+        # 调用父类的事件过滤器
+        return super().eventFilter(obj, event)
 
 
 def run() -> None:

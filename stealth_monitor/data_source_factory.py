@@ -6,8 +6,14 @@ from typing import Dict, Optional, Protocol
 
 import pandas as pd
 
-from .config import Instrument, Timeframe
-from .data_sources import fetch_data as _original_fetch_data
+# 修改相对导入为绝对导入
+import sys
+import os
+# 添加项目根目录到Python路径
+sys.path.append(os.path.join(os.path.dirname(__file__), '.'))
+
+from config import Instrument, Timeframe
+from data_sources import fetch_data as _original_fetch_data
 
 
 class DataSourceStrategy(Protocol):

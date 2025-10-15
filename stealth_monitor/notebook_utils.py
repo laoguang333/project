@@ -7,8 +7,14 @@ from typing import Dict, Optional
 
 import pandas as pd
 
-from .config import INSTRUMENT_INDEX, TIMEFRAME_INDEX, Instrument, Timeframe
-from .data_source_factory import (
+# 修改相对导入为绝对导入
+import sys
+import os
+# 添加项目根目录到Python路径
+sys.path.append(os.path.join(os.path.dirname(__file__), '.'))
+
+from config import INSTRUMENT_INDEX, TIMEFRAME_INDEX, Instrument, Timeframe
+from data_source_factory import (
     fetch_data as _factory_fetch_data,
     use_hybrid_cache,
     use_original_data_source,

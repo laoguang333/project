@@ -13,7 +13,13 @@ except ImportError as exc:  # pragma: no cover - optional dependency
     ak = None
     _AK_IMPORT_ERROR = exc
 
-from .config import Instrument, Timeframe
+# 修改相对导入为绝对导入
+import sys
+import os
+# 添加项目根目录到Python路径
+sys.path.append(os.path.join(os.path.dirname(__file__), '.'))
+
+from config import Instrument, Timeframe
 
 
 class DataFetchError(RuntimeError):
