@@ -13,8 +13,9 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Tuple
+import threading
 
 import numpy as np
 import pandas as pd
@@ -34,7 +35,7 @@ FOREGROUND_COLOR = "#CCCCCC"
 BACKGROUND_COLOR = "#1E1E1E"
 PANEL_BACKGROUND_COLOR = "#252526"
 ACCENT_COLOR = "#0E639C"
-MA_LINE_COLOR = "#C0C0C0"
+MA_LINE_COLOR = "#C5DFF8"
 CANDLE_MUTED_COLOR = "#3A3D41"
 CANDLE_MUTED_ALPHA = 85
 STATUS_BAR_COLOR = "#007ACC"
@@ -117,7 +118,54 @@ QPushButton#CloseButton:hover {{
     background-color: #C75450;
     color: white;
 }}
+
+QLabel#StatusLabel[state="idle"] {{
+    color: {STATUS_BAR_COLOR};
+}}
+
+QLabel#StatusLabel[state="loading"] {{
+    color: #CCCCCC;
+}}
+
+QLabel#StatusLabel[state="success"] {{
+    color: {STATUS_BAR_COLOR};
+}}
+
+QLabel#StatusLabel[state="error"] {{
+    color: #F48771;
+}}
 """
+
+@dataclass(frozen=True)
+class CacheProbe:
+    dataframe: pd.DataFrame
+    timestamp: datetime
+    age: timedelta
+    is_fresh: bool
+
+
+@dataclass(frozen=True)
+class FetchResult:
+    selection: "MarketSelection"
+    dataframe: pd.DataFrame
+    request_id: int
+    fetched_at: datetime
+    source: str  # "cache" or "network"
+
+
+@dataclass(frozen=True)
+class FetchError:
+    selection: "MarketSelection"
+    request_id: int
+    message: str
+
+
+class DataSignals(QtCore.QObject):
+    data_ready = QtCore.pyqtSignal(object)
+    data_failed = QtCore.pyqtSignal(object)
+
+    def __init__(self, parent: QtCore.QObject | None = None) -> None:
+        super().__init__(parent)
 
 
 def _build_timeframe_config() -> Dict[str, Tuple[str, TimeframePlan]]:
@@ -152,6 +200,9 @@ class DataAdaptor:
     def __init__(self, *, history_limit: int = 200, ma_period: int = 1) -> None:
         self.history_limit = history_limit
         self.ma_period = ma_period
+        self._ttl = timedelta(minutes=3)
+        self._cache: Dict[Tuple[str, str], Tuple[datetime, pd.DataFrame]] = {}
+        self._lock = threading.Lock()
 
     @staticmethod
     def _ensure_datetime(df: pd.DataFrame) -> pd.DataFrame:
@@ -160,26 +211,82 @@ class DataAdaptor:
         df = df.sort_values("datetime").reset_index(drop=True)
         return df
 
-    def fetch(self, selection: MarketSelection, *, prefer_cache: bool = True) -> pd.DataFrame:
+    def _cache_key(self, selection: MarketSelection) -> Tuple[str, str]:
+        return (selection.instrument_key, selection.timeframe_key)
+
+    def peek_cache(self, selection: MarketSelection) -> CacheProbe | None:
+        key = self._cache_key(selection)
+        with self._lock:
+            entry = self._cache.get(key)
+        if entry is None:
+            return None
+        timestamp, dataframe = entry
+        age = datetime.now() - timestamp
+        is_fresh = age <= self._ttl
+        return CacheProbe(
+            dataframe=dataframe.copy(deep=True),
+            timestamp=timestamp,
+            age=age,
+            is_fresh=is_fresh,
+        )
+
+    def fetch(self, selection: MarketSelection, *, force_refresh: bool = False) -> Tuple[pd.DataFrame, str]:
         plan = TIMEFRAME_CONFIG[selection.timeframe_key][1]
+        prefer_cache = not force_refresh
         df = load_market_data(
             selection.instrument_key,
             plan,
             limit=self.history_limit,
             prefer_cache=prefer_cache,
         )
-        return self._ensure_datetime(df)
+        cleaned = self._ensure_datetime(df)
+        key = self._cache_key(selection)
+        with self._lock:
+            self._cache[key] = (datetime.now(), cleaned.copy(deep=True))
+        source = "cache" if prefer_cache else "network"
+        return cleaned, source
 
-    def compute_ma(self, df: pd.DataFrame) -> pd.Series:
-        close = df["close"]
-        sma_func = getattr(fplt, "sma", None)
-        if callable(sma_func):
-            ma = sma_func(close, self.ma_period)
-        else:
-            ma = close.rolling(self.ma_period, min_periods=1).mean()
-        ma.index = df["datetime"]
-        return ma.dropna()
 
+class DataFetchTask(QtCore.QRunnable):
+    """Background task for loading market data without blocking the UI thread."""
+
+    def __init__(
+        self,
+        adaptor: DataAdaptor,
+        selection: MarketSelection,
+        request_id: int,
+        *,
+        force_refresh: bool,
+        signals: DataSignals,
+    ) -> None:
+        super().__init__()
+        self._adaptor = adaptor
+        self._selection = selection
+        self._request_id = request_id
+        self._force_refresh = force_refresh
+        self._signals = signals
+
+    def run(self) -> None:  # type: ignore[override]
+        try:
+            dataframe, source = self._adaptor.fetch(
+                self._selection,
+                force_refresh=self._force_refresh,
+            )
+            result = FetchResult(
+                selection=self._selection,
+                dataframe=dataframe,
+                request_id=self._request_id,
+                fetched_at=datetime.now(),
+                source=source,
+            )
+            self._signals.data_ready.emit(result)
+        except Exception as exc:  # pragma: no cover - defensive
+            error = FetchError(
+                selection=self._selection,
+                request_id=self._request_id,
+                message=str(exc),
+            )
+            self._signals.data_failed.emit(error)
 
 class TitleBar(QtWidgets.QWidget):
     """Custom frameless title bar styled like VS Code."""
@@ -427,6 +534,7 @@ class StealthMainWindow(QtWidgets.QMainWindow):
         status_bar.setSpacing(0)
         self.status_label = QtWidgets.QLabel("等待刷新...", self)
         self.status_label.setObjectName("StatusLabel")
+        self._update_status("等待刷新…", state="idle")
         status_bar.addWidget(self.status_label)
         status_bar.addStretch(1)
         content_layout.addLayout(status_bar)
@@ -439,6 +547,15 @@ class StealthMainWindow(QtWidgets.QMainWindow):
         self.size_grip.setStyleSheet("background-color: transparent;")
         grip_layout.addWidget(self.size_grip)
         content_layout.addLayout(grip_layout)
+
+        self.thread_pool = QtCore.QThreadPool.globalInstance()
+        if self.thread_pool.maxThreadCount() < 2:
+            self.thread_pool.setMaxThreadCount(2)
+        self._request_counter = 0
+        self._latest_request_id = 0
+        self._active_request_ids: set[int] = set()
+        self._request_signals: Dict[int, DataSignals] = {}
+        self._request_context: Dict[int, Dict[str, str]] = {}
 
         # Resize handling state
         self._resize_edge = QtCore.Qt.Edge(0)
@@ -475,10 +592,10 @@ class StealthMainWindow(QtWidgets.QMainWindow):
 
         self._timer = QtCore.QTimer(self)
         self._timer.setInterval(self.refresh_interval_ms)
-        self._timer.timeout.connect(self.refresh_chart)
+        self._timer.timeout.connect(self._refresh_timer)
         self._timer.start()
 
-        QtCore.QTimer.singleShot(0, self.refresh_chart)
+        QtCore.QTimer.singleShot(0, lambda: self._schedule_refresh(reason="startup"))
 
     def _build_control_row(self) -> QtWidgets.QLayout:
         row = QtWidgets.QHBoxLayout()
@@ -498,7 +615,7 @@ class StealthMainWindow(QtWidgets.QMainWindow):
         row.addWidget(self._wrap_with_label("周期", self.timeframe_combo))
 
         self.refresh_button = QtWidgets.QPushButton("立即刷新", self)
-        self.refresh_button.clicked.connect(self.refresh_chart)
+        self.refresh_button.clicked.connect(self._refresh_manual)
         row.addWidget(self.refresh_button)
 
         self.toggle_timer_button = QtWidgets.QPushButton("暂停自动刷新", self)
@@ -554,7 +671,7 @@ class StealthMainWindow(QtWidgets.QMainWindow):
             instrument_key=instrument_key,
             timeframe_key=timeframe_key,
         )
-        self.refresh_chart()
+        self._schedule_refresh(reason="selection")
 
     def _toggle_timer(self, checked: bool) -> None:
         if checked:
@@ -564,6 +681,7 @@ class StealthMainWindow(QtWidgets.QMainWindow):
             if not self._timer.isActive():
                 self._timer.start()
             self.toggle_timer_button.setText("暂停自动刷新")
+            self._schedule_refresh(reason="timer")
 
     def _toggle_stay_on_top(self, checked: bool) -> None:
         """切换窗口置顶状态"""
@@ -593,15 +711,130 @@ class StealthMainWindow(QtWidgets.QMainWindow):
                 return instrument
         raise KeyError(f"Unknown instrument key: {key}")
 
-    def refresh_chart(self) -> None:
-        try:
-            df = self.adaptor.fetch(self.selection)
-            self.chart.draw_chart(df)
-            now_str = datetime.now().strftime("%H:%M:%S")
-            self.status_label.setText(f"{self._format_selection()} 已更新 ({now_str})")
-        except Exception as exc:  # pragma: no cover - defensive path
+    def _refresh_manual(self) -> None:
+        self._schedule_refresh(reason="manual")
+
+    def _refresh_timer(self) -> None:
+        if self._timer.isActive():
+            self._schedule_refresh(reason="timer")
+
+    def _schedule_refresh(self, *, reason: str) -> None:
+        selection = self.selection
+        cache_probe = self.adaptor.peek_cache(selection)
+
+        if cache_probe is None:
             self.chart.clear()
-            self.status_label.setText(f"刷新失败: {exc}")
+            self._update_status(f"{self._reason_label(reason)}中…", state="loading")
+            force_refresh = True
+        else:
+            self.chart.draw_chart(cache_probe.dataframe)
+            timestamp_str = cache_probe.timestamp.strftime("%H:%M:%S")
+            if cache_probe.is_fresh and reason != "manual":
+                self._update_status(
+                    f"{self._format_selection()} 使用缓存 ({timestamp_str})",
+                    state="success",
+                )
+                force_refresh = False
+            else:
+                if cache_probe.is_fresh and reason == "manual":
+                    self._update_status(
+                        f"{self._reason_label(reason)}中…",
+                        state="loading",
+                    )
+                else:
+                    self._update_status("缓存已显示，后台刷新最新数据…", state="loading")
+                force_refresh = True
+
+        if not force_refresh:
+            return
+
+        self._start_fetch(selection, force_refresh=force_refresh, reason=reason)
+
+    def _start_fetch(self, selection: MarketSelection, *, force_refresh: bool, reason: str) -> None:
+        self._request_counter += 1
+        request_id = self._request_counter
+        signals = DataSignals(self)
+        signals.data_ready.connect(self._on_data_ready)
+        signals.data_failed.connect(self._on_data_failed)
+
+        task = DataFetchTask(
+            self.adaptor,
+            selection,
+            request_id=request_id,
+            force_refresh=force_refresh,
+            signals=signals,
+        )
+
+        self._active_request_ids.add(request_id)
+        self._request_signals[request_id] = signals
+        self._request_context[request_id] = {
+            "reason": reason,
+            "selection": selection,
+        }
+        self._latest_request_id = request_id
+        self._update_loading_state()
+        self.thread_pool.start(task)
+
+    def _on_data_ready(self, payload: object) -> None:
+        if not isinstance(payload, FetchResult):
+            return
+
+        self._active_request_ids.discard(payload.request_id)
+        self._request_signals.pop(payload.request_id, None)
+        context = self._request_context.pop(payload.request_id, {})
+        self._update_loading_state()
+
+        if payload.request_id < self._latest_request_id:
+            return  # stale result
+
+        reason_label = self._reason_label(context.get("reason", ""))
+        if payload.selection != self.selection:
+            return
+
+        self.chart.draw_chart(payload.dataframe)
+        source_label = "缓存" if payload.source == "cache" else "实时"
+        self._update_status(
+            f"{reason_label}完成 ({payload.fetched_at:%H:%M:%S}, {source_label})",
+            state="success",
+        )
+
+    def _on_data_failed(self, payload: object) -> None:
+        if not isinstance(payload, FetchError):
+            return
+
+        self._active_request_ids.discard(payload.request_id)
+        self._request_signals.pop(payload.request_id, None)
+        context = self._request_context.pop(payload.request_id, {})
+        self._update_loading_state()
+
+        if payload.request_id < self._latest_request_id:
+            return
+        if payload.selection != self.selection:
+            return
+
+        self.chart.clear()
+        reason_label = self._reason_label(context.get("reason", ""))
+        self._update_status(f"{reason_label}失败: {payload.message}", state="error")
+
+    def _update_loading_state(self) -> None:
+        self.refresh_button.setEnabled(not self._active_request_ids)
+
+    def _update_status(self, text: str, *, state: str) -> None:
+        self.status_label.setText(text)
+        self.status_label.setProperty("state", state)
+        self.status_label.style().unpolish(self.status_label)
+        self.status_label.style().polish(self.status_label)
+        self.status_label.update()
+
+    @staticmethod
+    def _reason_label(reason: str) -> str:
+        mapping = {
+            "manual": "手动刷新",
+            "timer": "自动刷新",
+            "selection": "切换刷新",
+            "startup": "启动刷新",
+        }
+        return mapping.get(reason, "刷新")
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
         super().resizeEvent(event)
