@@ -10,6 +10,10 @@ try:
 except:
     pass
 
+# 单实例检查
+from .single_instance import check_single_instance
+check_single_instance()
+
 from .app import run
 
 

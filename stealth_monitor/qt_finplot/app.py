@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import QSystemTrayIcon, QMenu
 
 from config import INSTRUMENTS, Instrument
 from notebook_utils import TimeframePlan, load_market_data
+from .single_instance import release_single_instance
 
 # VS Code inspired palette.
 FOREGROUND_COLOR = "#CCCCCC"
@@ -752,6 +753,8 @@ class StealthMainWindow(QtWidgets.QMainWindow):
 
     def _quit_application(self) -> None:
         """退出应用程序"""
+        # 释放单实例检查器资源
+        release_single_instance()
         # 先隐藏托盘图标再退出应用
         if self.tray_icon:
             self.tray_icon.hide()
