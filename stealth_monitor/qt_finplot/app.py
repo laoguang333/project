@@ -506,6 +506,31 @@ class StealthMainWindow(QtWidgets.QMainWindow):
         self.toggle_timer_button.toggled.connect(self._toggle_timer)
         row.addWidget(self.toggle_timer_button)
 
+        # 添加窗口置顶按钮
+        self.toggle_stay_on_top_button = QtWidgets.QPushButton("置顶", self)
+        self.toggle_stay_on_top_button.setCheckable(True)
+        self.toggle_stay_on_top_button.toggled.connect(self._toggle_stay_on_top)
+        row.addWidget(self.toggle_stay_on_top_button)
+
+        # 添加透明度控制
+        opacity_container = QtWidgets.QWidget(self)
+        opacity_layout = QtWidgets.QHBoxLayout(opacity_container)
+        opacity_layout.setContentsMargins(0, 0, 0, 0)
+        opacity_layout.setSpacing(4)
+        
+        opacity_label = QtWidgets.QLabel("透明度", opacity_container)
+        opacity_label.setProperty("class", "section-title")
+        opacity_layout.addWidget(opacity_label)
+        
+        self.opacity_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal, self)
+        self.opacity_slider.setRange(20, 100)  # 20%到100%的透明度范围
+        self.opacity_slider.setValue(100)  # 默认不透明
+        self.opacity_slider.setFixedWidth(80)
+        self.opacity_slider.valueChanged.connect(self._on_opacity_changed)
+        opacity_layout.addWidget(self.opacity_slider)
+        
+        row.addWidget(opacity_container)
+
         row.addStretch(1)
         return row
 
@@ -539,6 +564,22 @@ class StealthMainWindow(QtWidgets.QMainWindow):
             if not self._timer.isActive():
                 self._timer.start()
             self.toggle_timer_button.setText("暂停自动刷新")
+
+    def _toggle_stay_on_top(self, checked: bool) -> None:
+        """切换窗口置顶状态"""
+        if checked:
+            self.setWindowFlag(QtCore.Qt.WindowType.WindowStaysOnTopHint, True)
+            self.toggle_stay_on_top_button.setText("取消置顶")
+        else:
+            self.setWindowFlag(QtCore.Qt.WindowType.WindowStaysOnTopHint, False)
+            self.toggle_stay_on_top_button.setText("置顶")
+        self.show()  # 重新显示窗口以应用更改
+
+    def _on_opacity_changed(self, value: int) -> None:
+        """处理透明度变化"""
+        # 将0-100的值转换为0.0-1.0的透明度值
+        opacity = value / 100.0
+        self.setWindowOpacity(opacity)
 
     def _format_selection(self) -> str:
         instrument = self._instrument_by_key(self.selection.instrument_key)
