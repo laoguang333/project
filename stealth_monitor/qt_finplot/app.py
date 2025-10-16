@@ -21,6 +21,7 @@ import signal
 import numpy as np
 import pandas as pd
 from PyQt6 import QtCore, QtGui, QtWidgets
+from PyQt6.QtCore import QSettings
 
 import finplot as fplt
 import pyqtgraph as pg
@@ -490,10 +491,18 @@ class StealthMainWindow(QtWidgets.QMainWindow):
         super().__init__(parent)
         self.adaptor = adaptor
         self.refresh_interval_ms = refresh_interval_ms
-        self.selection = MarketSelection(
+        
+        # 初始化设置对象
+        self.settings = QSettings("StealthMonitor", "MainApp")
+        
+        # 创建默认的市场选择
+        default_selection = MarketSelection(
             instrument_key=INSTRUMENTS[0].key,
             timeframe_key="1d",
         )
+        
+        # 尝试从设置中加载保存的选择
+        self.selection = self._load_selection_setting(default_selection)
 
         self.setWindowTitle("Stealth Monitor MA1")
         self.resize(1000, 640)
@@ -592,12 +601,30 @@ class StealthMainWindow(QtWidgets.QMainWindow):
         control_row = content_layout.itemAt(0).layout()  # 获取已存在的控制行
         control_row.addWidget(self.auto_tray_button)
 
+        # 加载保存的设置
+        self._load_settings()
+
         self._timer = QtCore.QTimer(self)
         self._timer.setInterval(self.refresh_interval_ms)
         self._timer.timeout.connect(self._refresh_timer)
         self._timer.start()
 
         QtCore.QTimer.singleShot(0, lambda: self._schedule_refresh(reason="startup"))
+
+    def _load_selection_setting(self, default_selection: MarketSelection) -> MarketSelection:
+        """从设置中加载保存的市场选择"""
+        # 获取保存的设置
+        saved_instrument = self.settings.value("settings/instrument")
+        saved_timeframe = self.settings.value("settings/timeframe")
+        
+        # 如果有保存的设置，则使用保存的值，否则使用默认值
+        instrument_key = saved_instrument if saved_instrument else default_selection.instrument_key
+        timeframe_key = saved_timeframe if saved_timeframe else default_selection.timeframe_key
+        
+        return MarketSelection(
+            instrument_key=instrument_key,
+            timeframe_key=timeframe_key,
+        )
 
     def _build_control_row(self) -> QtWidgets.QLayout:
         row = QtWidgets.QHBoxLayout()
@@ -653,6 +680,62 @@ class StealthMainWindow(QtWidgets.QMainWindow):
         row.addStretch(1)
         return row
 
+    def _save_settings(self) -> None:
+        """保存当前设置"""
+        # 保存当前选择的市场和时间周期
+        self.settings.setValue("settings/instrument", self.selection.instrument_key)
+        self.settings.setValue("settings/timeframe", self.selection.timeframe_key)
+        
+        # 保存按钮状态
+        self.settings.setValue("settings/auto_refresh_enabled", not self.toggle_timer_button.isChecked())
+        self.settings.setValue("settings/stay_on_top", self.toggle_stay_on_top_button.isChecked())
+        self.settings.setValue("settings/auto_tray", self.auto_tray_button.isChecked())
+        
+        # 保存透明度设置
+        self.settings.setValue("settings/opacity", self.opacity_slider.value())
+
+    def _load_settings(self) -> None:
+        """加载保存的设置"""
+        # 加载品种和周期设置
+        instrument_key = self.settings.value("settings/instrument", "main", type=str)
+        timeframe_key = self.settings.value("settings/timeframe", "5", type=str)
+        
+        # 设置组合框的当前值
+        index = self.instrument_combo.findData(instrument_key)
+        if index >= 0:
+            self.instrument_combo.setCurrentIndex(index)
+            
+        index = self.timeframe_combo.findData(timeframe_key)
+        if index >= 0:
+            self.timeframe_combo.setCurrentIndex(index)
+        
+        # 更新selection对象
+        self.selection = MarketSelection(
+            instrument_key=instrument_key,
+            timeframe_key=timeframe_key,
+        )
+        
+        # 加载按钮状态
+        auto_refresh_enabled = self.settings.value("settings/auto_refresh_enabled", True, type=bool)
+        if not auto_refresh_enabled:
+            self.toggle_timer_button.setChecked(True)
+            self._toggle_timer(True)
+        
+        stay_on_top = self.settings.value("settings/stay_on_top", False, type=bool)
+        if stay_on_top:
+            self.toggle_stay_on_top_button.setChecked(True)
+            self._toggle_stay_on_top(True)
+            
+        auto_tray = self.settings.value("settings/auto_tray", False, type=bool)
+        if auto_tray:
+            self.auto_tray_button.setChecked(True)
+            self._toggle_auto_tray(True)
+        
+        # 加载透明度设置
+        opacity = self.settings.value("settings/opacity", 100, type=int)
+        self.opacity_slider.setValue(opacity)
+        self._on_opacity_changed(opacity)
+
     def _wrap_with_label(self, text: str, widget: QtWidgets.QWidget) -> QtWidgets.QWidget:
         container = QtWidgets.QWidget(self)
         layout = QtWidgets.QVBoxLayout(container)
@@ -673,6 +756,8 @@ class StealthMainWindow(QtWidgets.QMainWindow):
             instrument_key=instrument_key,
             timeframe_key=timeframe_key,
         )
+        # 保存设置
+        self._save_settings()
         self._schedule_refresh(reason="selection")
 
     def _toggle_timer(self, checked: bool) -> None:
@@ -684,6 +769,8 @@ class StealthMainWindow(QtWidgets.QMainWindow):
                 self._timer.start()
             self.toggle_timer_button.setText("暂停自动刷新")
             self._schedule_refresh(reason="timer")
+        # 保存设置
+        self._save_settings()
 
     def _toggle_stay_on_top(self, checked: bool) -> None:
         """切换窗口置顶状态"""
@@ -694,12 +781,16 @@ class StealthMainWindow(QtWidgets.QMainWindow):
             self.setWindowFlag(QtCore.Qt.WindowType.WindowStaysOnTopHint, False)
             self.toggle_stay_on_top_button.setText("置顶")
         self.show()  # 重新显示窗口以应用更改
+        # 保存设置
+        self._save_settings()
 
     def _on_opacity_changed(self, value: int) -> None:
         """处理透明度变化"""
-        # 将0-100的值转换为0.0-1.0的透明度值
+        # 将20-100的滑块值映射到0.2-1.0的窗口透明度
         opacity = value / 100.0
         self.setWindowOpacity(opacity)
+        # 保存设置
+        self._save_settings()
 
     def _format_selection(self) -> str:
         instrument = self._instrument_by_key(self.selection.instrument_key)
@@ -1110,6 +1201,8 @@ class StealthMainWindow(QtWidgets.QMainWindow):
             # 停止鼠标监控
             self.removeEventFilter(self)
             self.mouse_idle_timer.stop()
+        # 保存设置
+        self._save_settings()
 
     def _on_mouse_idle(self) -> None:
         """鼠标静止超时处理"""
