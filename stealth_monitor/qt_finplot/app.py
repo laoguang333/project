@@ -555,6 +555,15 @@ class ChartPane:
         self.ax.vb.updateAutoRange()
         fplt.refresh()
 
+    def get_view_range(self):
+        """获取当前视图范围"""
+        return self.ax.vb.viewRange()
+    
+    def set_view_range(self, view_range):
+        """设置视图范围"""
+        if view_range is not None:
+            self.ax.vb.setRange(xRange=view_range[0], yRange=view_range[1], padding=0, disableAutoRange=True)
+
 
 class StealthMainWindow(QtWidgets.QMainWindow):
     """Main window hosting controls and the finplot chart."""
@@ -692,20 +701,13 @@ class StealthMainWindow(QtWidgets.QMainWindow):
 
         QtCore.QTimer.singleShot(0, lambda: self._schedule_refresh(reason="startup"))
 
-    def _load_selection_setting(self, default_selection: MarketSelection) -> MarketSelection:
-        """从设置中加载保存的市场选择"""
-        # 获取保存的设置
-        saved_instrument = self.settings.value("settings/instrument")
-        saved_timeframe = self.settings.value("settings/timeframe")
-        
-        # 如果有保存的设置，则使用保存的值，否则使用默认值
-        instrument_key = saved_instrument if saved_instrument else default_selection.instrument_key
-        timeframe_key = saved_timeframe if saved_timeframe else default_selection.timeframe_key
-        
-        return MarketSelection(
-            instrument_key=instrument_key,
-            timeframe_key=timeframe_key,
-        )
+    def _load_selection_setting(self, default: MarketSelection) -> MarketSelection:
+        """从设置中加载市场选择，如果不存在则使用默认值"""
+        instrument_key = self.settings.value("settings/instrument", default.instrument_key, type=str)
+        timeframe_key = self.settings.value("settings/timeframe", default.timeframe_key, type=str)
+        # 恢复视图范围
+        self._saved_view_range = self.settings.value("settings/view_range", None)
+        return MarketSelection(instrument_key=instrument_key, timeframe_key=timeframe_key)
 
     def _build_control_row(self) -> QtWidgets.QLayout:
         row = QtWidgets.QHBoxLayout()
@@ -766,13 +768,13 @@ class StealthMainWindow(QtWidgets.QMainWindow):
         # 保存当前选择的市场和时间周期
         self.settings.setValue("settings/instrument", self.selection.instrument_key)
         self.settings.setValue("settings/timeframe", self.selection.timeframe_key)
-        
-        # 保存按钮状态
+        # 保存视图范围
+        view_range = self.chart.get_view_range()
+        self.settings.setValue("settings/view_range", str(view_range))
+        # 保存其他设置
         self.settings.setValue("settings/auto_refresh_enabled", not self.toggle_timer_button.isChecked())
         self.settings.setValue("settings/stay_on_top", self.toggle_stay_on_top_button.isChecked())
         self.settings.setValue("settings/auto_tray", self.auto_tray_button.isChecked())
-        
-        # 保存透明度设置
         self.settings.setValue("settings/opacity", self.opacity_slider.value())
 
     def _load_settings(self) -> None:
@@ -994,6 +996,17 @@ class StealthMainWindow(QtWidgets.QMainWindow):
 
             reason_label = self._reason_label(context.get("reason", ""))
             self.chart.draw_chart(payload.dataframe)
+            # 恢复保存的视图范围
+            if hasattr(self, '_saved_view_range') and self._saved_view_range is not None:
+                try:
+                    # 将字符串转换回列表
+                    view_range = eval(self._saved_view_range)
+                    self.chart.set_view_range(view_range)
+                except:
+                    pass
+                # 清除保存的视图范围，避免重复应用
+                self._saved_view_range = None
+            
             source_label = "缓存" if payload.source == "cache" else "实时"
             self._update_status(
                 f"{reason_label}完成 ({payload.fetched_at:%H:%M:%S}, {source_label})",
