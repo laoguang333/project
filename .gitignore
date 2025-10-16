@@ -43,3 +43,8 @@ data/
 *.pyc
 
 data_cache.db
+
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock
