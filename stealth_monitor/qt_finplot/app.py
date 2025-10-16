@@ -172,13 +172,13 @@ class DataSignals(QtCore.QObject):
 def _build_timeframe_config() -> Dict[str, Tuple[str, TimeframePlan]]:
     """Create the timeframe menu metadata."""
     return {
-        "1d": ("日线", TimeframePlan(base_key="1d")),
-        "1m": ("1分钟", TimeframePlan(base_key="1m")),
-        "5m": ("5分钟", TimeframePlan(base_key="5m")),
-        "15m": ("15分钟", TimeframePlan(base_key="15m")),
-        "30m": ("30分钟", TimeframePlan(base_key="30m")),
-        "1h": ("1小时", TimeframePlan(base_key="60m")),
-        "4h": ("4小时", TimeframePlan(base_key="60m", resample_rule="4H", limit_multiplier=4)),
+        "1d": ("日", TimeframePlan(base_key="1d")),
+        "1m": ("1", TimeframePlan(base_key="1m")),
+        "5m": ("5", TimeframePlan(base_key="5m")),
+        "15m": ("15", TimeframePlan(base_key="15m")),
+        "30m": ("30", TimeframePlan(base_key="30m")),
+        "1h": ("60", TimeframePlan(base_key="60m")),
+        "4h": ("240", TimeframePlan(base_key="60m", resample_rule="4H", limit_multiplier=4)),
     }
 
 
@@ -608,13 +608,13 @@ class StealthMainWindow(QtWidgets.QMainWindow):
         for instrument in INSTRUMENTS:
             self.instrument_combo.addItem(instrument.label, instrument.key)
         self.instrument_combo.currentIndexChanged.connect(self._on_selection_changed)
-        row.addWidget(self._wrap_with_label("品种", self.instrument_combo))
+        row.addWidget(self.instrument_combo)
 
         self.timeframe_combo = CircularComboBox(self)
         for key, (label, _plan) in TIMEFRAME_CONFIG.items():
             self.timeframe_combo.addItem(label, key)
         self.timeframe_combo.currentIndexChanged.connect(self._on_selection_changed)
-        row.addWidget(self._wrap_with_label("周期", self.timeframe_combo))
+        row.addWidget(self.timeframe_combo)
 
         self.refresh_button = QtWidgets.QPushButton("立即刷新", self)
         self.refresh_button.clicked.connect(self._refresh_manual)
