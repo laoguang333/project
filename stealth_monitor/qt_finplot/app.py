@@ -580,6 +580,8 @@ class StealthMainWindow(QtWidgets.QMainWindow):
 
         # 系统托盘功能
         self.tray_icon = None
+        self._tray_icon_icon: QtGui.QIcon | None = None
+        self._tray_icon_source = "unknown"
         self._setup_tray_icon()
         # 添加自动托盘功能开关按钮到控制行
         self.auto_tray_button = QtWidgets.QPushButton("启用自动托盘", self)
@@ -995,10 +997,17 @@ class StealthMainWindow(QtWidgets.QMainWindow):
             self.tray_icon = QSystemTrayIcon(self)
 
         tray_icon = self._resolve_tray_icon()
+        self._tray_icon_icon = tray_icon
         self.tray_icon.setIcon(tray_icon)
         if self.windowIcon().isNull():
             self.setWindowIcon(tray_icon)
+        app_instance = QtWidgets.QApplication.instance()
+        if app_instance and app_instance.windowIcon().isNull():
+            app_instance.setWindowIcon(tray_icon)
         self.tray_icon.setToolTip(self.windowTitle() or "Stealth Monitor MA1")
+        if __debug__ and tray_icon is not None:
+            sizes = [f"{size.width()}x{size.height()}" for size in tray_icon.availableSizes()] or ["<empty>"]
+            print("[tray] 图标来源: %s, 可用尺寸: %s" % (self._tray_icon_source, ", ".join(sizes)))
 
         tray_menu = QMenu(self)
 
@@ -1014,37 +1023,56 @@ class StealthMainWindow(QtWidgets.QMainWindow):
         self.tray_icon.show()
 
     def _resolve_tray_icon(self) -> QtGui.QIcon:
-        """返回一个在 Windows 11 上也可靠的托盘图标"""
-        candidates = [
-            self.windowIcon(),
-            QtGui.QIcon.fromTheme("applications-system"),
-            self.style().standardIcon(QtWidgets.QStyle.StandardPixmap.SP_ComputerIcon),
+        """????? Windows 11 ?????????"""
+        app_instance = QtWidgets.QApplication.instance()
+        sources = [
+            ("window", self.windowIcon()),
+            ("application", app_instance.windowIcon() if app_instance else None),
+            ("theme", QtGui.QIcon.fromTheme("applications-system")),
+            ("style", self.style().standardIcon(QtWidgets.QStyle.StandardPixmap.SP_ComputerIcon)),
         ]
-        for icon in candidates:
-            if icon and not icon.isNull():
+        for source, icon in sources:
+            if self._is_icon_usable(icon):
+                self._tray_icon_source = source
                 return icon
+        self._tray_icon_source = "fallback"
         return self._create_fallback_tray_icon()
+
+    def _is_icon_usable(self, icon: QtGui.QIcon | None) -> bool:
+        """检查图标是否包含可用的位图"""
+        if not icon or icon.isNull():
+            return False
+        for size in (16, 20, 24, 32, 48, 64):
+            pixmap = icon.pixmap(size, size)
+            if not pixmap.isNull():
+                return True
+        return False
 
     def _create_fallback_tray_icon(self) -> QtGui.QIcon:
         """生成兜底托盘图标，避免空图标被系统忽略"""
-        size = 64
-        pixmap = QtGui.QPixmap(size, size)
-        pixmap.fill(QtGui.QColor(ACCENT_COLOR))
+        base_size = 128
+        base_pixmap = QtGui.QPixmap(base_size, base_size)
+        base_pixmap.fill(QtGui.QColor(ACCENT_COLOR))
 
-        painter = QtGui.QPainter(pixmap)
+        painter = QtGui.QPainter(base_pixmap)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
         painter.setBrush(QtGui.QColor(BACKGROUND_COLOR))
         painter.setPen(QtGui.QPen(QtGui.QColor(BACKGROUND_COLOR)))
-        painter.drawEllipse(6, 6, size - 12, size - 12)
+        painter.drawEllipse(12, 12, base_size - 24, base_size - 24)
 
         painter.setPen(QtGui.QPen(QtGui.QColor(FOREGROUND_COLOR)))
-        font = QtGui.QFont("Segoe UI", 26, QtGui.QFont.Weight.Bold)
+        font = QtGui.QFont("Segoe UI", 52, QtGui.QFont.Weight.Bold)
         painter.setFont(font)
-        painter.drawText(pixmap.rect(), QtCore.Qt.AlignmentFlag.AlignCenter, "S")
+        painter.drawText(base_pixmap.rect(), QtCore.Qt.AlignmentFlag.AlignCenter, "S")
         painter.end()
 
-        return QtGui.QIcon(pixmap)
-
+        icon = QtGui.QIcon()
+        icon.addPixmap(base_pixmap)
+        for size in (16, 20, 24, 32, 48, 64):
+            scaled = base_pixmap.scaled(size, size, QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                                      QtCore.Qt.TransformationMode.SmoothTransformation)
+            icon.addPixmap(scaled)
+        return icon
     def _on_tray_icon_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         """处理托盘图标被点击的事件"""
         if reason in (
