@@ -161,6 +161,13 @@ class FetchError:
     request_id: int
     message: str
 
+@dataclass(frozen=True)
+class FetchJob:
+    selection: "MarketSelection"
+    request_id: int
+    reason: str
+    force_refresh: bool
+
 
 class DataSignals(QtCore.QObject):
     data_ready = QtCore.pyqtSignal(object)
@@ -565,7 +572,10 @@ class StealthMainWindow(QtWidgets.QMainWindow):
         self._latest_request_id = 0
         self._active_request_ids: set[int] = set()
         self._request_signals: Dict[int, DataSignals] = {}
-        self._request_context: Dict[int, Dict[str, str]] = {}
+        self._request_context: Dict[int, Dict[str, object]] = {}
+        self._fetch_in_progress = False
+        self._pending_fetch: FetchJob | None = None
+        self._running_job: FetchJob | None = None
 
         # Resize handling state
         self._resize_edge = QtCore.Qt.Edge(0)
@@ -841,32 +851,61 @@ class StealthMainWindow(QtWidgets.QMainWindow):
         if not force_refresh:
             return
 
-        self._start_fetch(selection, force_refresh=force_refresh, reason=reason)
+        self._enqueue_fetch(selection, force_refresh=force_refresh, reason=reason)
 
-    def _start_fetch(self, selection: MarketSelection, *, force_refresh: bool, reason: str) -> None:
+    def _enqueue_fetch(self, selection: MarketSelection, *, force_refresh: bool, reason: str) -> None:
         self._request_counter += 1
         request_id = self._request_counter
+        job = FetchJob(
+            selection=selection,
+            request_id=request_id,
+            reason=reason,
+            force_refresh=force_refresh,
+        )
+        self._pending_fetch = job
+        self._latest_request_id = request_id
+        self._drain_fetch_queue()
+
+    def _drain_fetch_queue(self) -> None:
+        if self._fetch_in_progress:
+            return
+        if self._pending_fetch is None:
+            return
+        job = self._pending_fetch
+        self._pending_fetch = None
+        self._start_fetch_job(job)
+
+    def _start_fetch_job(self, job: FetchJob) -> None:
         signals = DataSignals(self)
         signals.data_ready.connect(self._on_data_ready)
         signals.data_failed.connect(self._on_data_failed)
 
         task = DataFetchTask(
             self.adaptor,
-            selection,
-            request_id=request_id,
-            force_refresh=force_refresh,
+            job.selection,
+            request_id=job.request_id,
+            force_refresh=job.force_refresh,
             signals=signals,
         )
 
-        self._active_request_ids.add(request_id)
-        self._request_signals[request_id] = signals
-        self._request_context[request_id] = {
-            "reason": reason,
-            "selection": selection,
+        self._fetch_in_progress = True
+        self._running_job = job
+        self._active_request_ids.add(job.request_id)
+        self._request_signals[job.request_id] = signals
+        self._request_context[job.request_id] = {
+            "reason": job.reason,
+            "selection": job.selection,
         }
-        self._latest_request_id = request_id
         self._update_loading_state()
         self.thread_pool.start(task)
+
+    def _complete_fetch_cycle(self) -> None:
+        self._fetch_in_progress = False
+        self._running_job = None
+        if self._pending_fetch is not None:
+            self._drain_fetch_queue()
+        else:
+            self._update_loading_state()
 
     def _on_data_ready(self, payload: object) -> None:
         if not isinstance(payload, FetchResult):
@@ -875,21 +914,22 @@ class StealthMainWindow(QtWidgets.QMainWindow):
         self._active_request_ids.discard(payload.request_id)
         self._request_signals.pop(payload.request_id, None)
         context = self._request_context.pop(payload.request_id, {})
-        self._update_loading_state()
+        try:
+            if payload.request_id < self._latest_request_id:
+                return  # stale result
 
-        if payload.request_id < self._latest_request_id:
-            return  # stale result
+            if payload.selection != self.selection:
+                return
 
-        reason_label = self._reason_label(context.get("reason", ""))
-        if payload.selection != self.selection:
-            return
-
-        self.chart.draw_chart(payload.dataframe)
-        source_label = "缓存" if payload.source == "cache" else "实时"
-        self._update_status(
-            f"{reason_label}完成 ({payload.fetched_at:%H:%M:%S}, {source_label})",
-            state="success",
-        )
+            reason_label = self._reason_label(context.get("reason", ""))
+            self.chart.draw_chart(payload.dataframe)
+            source_label = "缓存" if payload.source == "cache" else "实时"
+            self._update_status(
+                f"{reason_label}完成 ({payload.fetched_at:%H:%M:%S}, {source_label})",
+                state="success",
+            )
+        finally:
+            self._complete_fetch_cycle()
 
     def _on_data_failed(self, payload: object) -> None:
         if not isinstance(payload, FetchError):
@@ -898,16 +938,17 @@ class StealthMainWindow(QtWidgets.QMainWindow):
         self._active_request_ids.discard(payload.request_id)
         self._request_signals.pop(payload.request_id, None)
         context = self._request_context.pop(payload.request_id, {})
-        self._update_loading_state()
+        try:
+            if payload.request_id < self._latest_request_id:
+                return
+            if payload.selection != self.selection:
+                return
 
-        if payload.request_id < self._latest_request_id:
-            return
-        if payload.selection != self.selection:
-            return
-
-        self.chart.clear()
-        reason_label = self._reason_label(context.get("reason", ""))
-        self._update_status(f"{reason_label}失败: {payload.message}", state="error")
+            self.chart.clear()
+            reason_label = self._reason_label(context.get("reason", ""))
+            self._update_status(f"{reason_label}失败: {payload.message}", state="error")
+        finally:
+            self._complete_fetch_cycle()
 
     def _update_loading_state(self) -> None:
         self.refresh_button.setEnabled(not self._active_request_ids)
