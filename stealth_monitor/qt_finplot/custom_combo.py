@@ -28,9 +28,9 @@ class CircularComboBox(QtWidgets.QComboBox):
         Args:
             event: 滚轮事件
         """
-        # 检查控件是否有焦点
-        if not self.hasFocus() and event.buttons() == QtCore.Qt.MouseButton.NoButton:
-            # 如果控件没有焦点且没有按下鼠标按钮，不处理滚轮事件
+        # 检查鼠标是否在控件上
+        if not self.underMouse() and event.buttons() == QtCore.Qt.MouseButton.NoButton:
+            # 如果鼠标不在控件上且没有按下鼠标按钮，不处理滚轮事件
             # 这样可以避免在用户滚动页面时意外改变选择
             event.ignore()
             return
