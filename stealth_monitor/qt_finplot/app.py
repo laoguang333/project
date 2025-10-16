@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Dict, Tuple
 import threading
+import signal
 
 import numpy as np
 import pandas as pd
@@ -563,6 +564,13 @@ class StealthMainWindow(QtWidgets.QMainWindow):
         self._resize_start_rect: QtCore.QRect | None = None
         self._resize_start_pos: QtCore.QPoint | None = None
 
+        # 鼠标静止检测状态
+        self.mouse_idle_enabled = False  # 默认关闭自动托盘功能
+        self.mouse_idle_timer = QtCore.QTimer(self)
+        self.mouse_idle_timer.setInterval(20000)  # 20秒
+        self.mouse_idle_timer.timeout.connect(self._on_mouse_idle)
+        self.last_mouse_pos = None
+
         # Enable mouse tracking for resizing detection
         self.setMouseTracking(True)
         for widget in (central, content_frame, self.title_bar, self):
@@ -573,14 +581,6 @@ class StealthMainWindow(QtWidgets.QMainWindow):
         # 系统托盘功能
         self.tray_icon = None
         self._setup_tray_icon()
-        
-        # 鼠标静止检测功能
-        self.mouse_idle_timer = QtCore.QTimer(self)
-        self.mouse_idle_timer.setInterval(20000)  # 20秒
-        self.mouse_idle_timer.timeout.connect(self._on_mouse_idle)
-        self.mouse_idle_enabled = False  # 默认关闭自动托盘功能
-        self.last_mouse_pos = None
-        
         # 添加自动托盘功能开关按钮到控制行
         self.auto_tray_button = QtWidgets.QPushButton("启用自动托盘", self)
         self.auto_tray_button.setCheckable(True)
@@ -990,41 +990,73 @@ class StealthMainWindow(QtWidgets.QMainWindow):
         """设置系统托盘图标"""
         if not QSystemTrayIcon.isSystemTrayAvailable():
             return
-            
-        # 创建系统托盘图标
-        self.tray_icon = QSystemTrayIcon(self)
-        
-        # 设置托盘图标（这里使用应用程序图标，如果有的话）
-        # 如果没有特定图标，可以使用默认图标
-        self.tray_icon.setIcon(self.style().standardIcon(QtWidgets.QStyle.StandardPixmap.SP_ComputerIcon))
-        
-        # 创建托盘菜单
+
+        if self.tray_icon is None:
+            self.tray_icon = QSystemTrayIcon(self)
+
+        tray_icon = self._resolve_tray_icon()
+        self.tray_icon.setIcon(tray_icon)
+        if self.windowIcon().isNull():
+            self.setWindowIcon(tray_icon)
+        self.tray_icon.setToolTip(self.windowTitle() or "Stealth Monitor MA1")
+
         tray_menu = QMenu(self)
-        
-        # 添加显示/隐藏选项
+
         show_action = tray_menu.addAction("显示")
         show_action.triggered.connect(self.showNormal)
-        
-        # 添加退出选项
+
         quit_action = tray_menu.addAction("退出")
         quit_action.triggered.connect(self._quit_application)
-        
+
         self.tray_icon.setContextMenu(tray_menu)
-        
-        # 连接托盘图标激活信号
         self.tray_icon.activated.connect(self._on_tray_icon_activated)
-        
-        # 显示托盘图标
+        self.tray_icon.setVisible(True)
         self.tray_icon.show()
+
+    def _resolve_tray_icon(self) -> QtGui.QIcon:
+        """返回一个在 Windows 11 上也可靠的托盘图标"""
+        candidates = [
+            self.windowIcon(),
+            QtGui.QIcon.fromTheme("applications-system"),
+            self.style().standardIcon(QtWidgets.QStyle.StandardPixmap.SP_ComputerIcon),
+        ]
+        for icon in candidates:
+            if icon and not icon.isNull():
+                return icon
+        return self._create_fallback_tray_icon()
+
+    def _create_fallback_tray_icon(self) -> QtGui.QIcon:
+        """生成兜底托盘图标，避免空图标被系统忽略"""
+        size = 64
+        pixmap = QtGui.QPixmap(size, size)
+        pixmap.fill(QtGui.QColor(ACCENT_COLOR))
+
+        painter = QtGui.QPainter(pixmap)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        painter.setBrush(QtGui.QColor(BACKGROUND_COLOR))
+        painter.setPen(QtGui.QPen(QtGui.QColor(BACKGROUND_COLOR)))
+        painter.drawEllipse(6, 6, size - 12, size - 12)
+
+        painter.setPen(QtGui.QPen(QtGui.QColor(FOREGROUND_COLOR)))
+        font = QtGui.QFont("Segoe UI", 26, QtGui.QFont.Weight.Bold)
+        painter.setFont(font)
+        painter.drawText(pixmap.rect(), QtCore.Qt.AlignmentFlag.AlignCenter, "S")
+        painter.end()
+
+        return QtGui.QIcon(pixmap)
 
     def _on_tray_icon_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         """处理托盘图标被点击的事件"""
-        if reason == QSystemTrayIcon.ActivationReason.Trigger:
-            # 单击托盘图标时切换窗口显示状态
+        if reason in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        ):
             if self.isVisible():
                 self.hide()
             else:
                 self.showNormal()
+                self.raise_()
+                self.activateWindow()
 
     def _quit_application(self) -> None:
         """退出应用程序"""
@@ -1068,7 +1100,7 @@ class StealthMainWindow(QtWidgets.QMainWindow):
 
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
         """事件过滤器，用于监控鼠标活动"""
-        if self.mouse_idle_enabled and isinstance(event, QtGui.QMouseEvent):
+        if getattr(self, "mouse_idle_enabled", False) and isinstance(event, QtGui.QMouseEvent):
             # 有任何鼠标活动都重置计时器
             self.mouse_idle_timer.start()
             self.last_mouse_pos = QtGui.QCursor.pos()
@@ -1076,6 +1108,27 @@ class StealthMainWindow(QtWidgets.QMainWindow):
         # 调用父类的事件过滤器
         return super().eventFilter(obj, event)
 
+
+
+def _install_sigint_handler(app: QtWidgets.QApplication) -> None:
+    """在控制台环境下让 Ctrl+C 中断 Qt 事件循环"""
+    try:
+        signal.signal(signal.SIGINT, lambda *_: QtWidgets.QApplication.quit())
+    except ValueError:
+        # 信号注册失败时直接返回（常见于非主线程环境）
+        return
+
+    timer = QtCore.QTimer()
+    timer.setInterval(200)
+    timer.timeout.connect(lambda: None)
+    timer.start()
+
+    def _stop_timer() -> None:
+        timer.stop()
+        timer.deleteLater()
+
+    app.aboutToQuit.connect(_stop_timer)
+    app._sigint_helper_timer = timer
 
 def run() -> None:
     """
@@ -1085,6 +1138,8 @@ def run() -> None:
     own_app = app is None
     if own_app:
         app = QtWidgets.QApplication(sys.argv)
+        _install_sigint_handler(app)
+    app.setQuitOnLastWindowClosed(False)
     adaptor = DataAdaptor()
     window = StealthMainWindow(adaptor)
     window.show()
