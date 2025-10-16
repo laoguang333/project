@@ -4,6 +4,8 @@ from __future__ import annotations
 import time
 from typing import Dict, Optional, Tuple
 
+import pandas as pd
+
 from .config import Instrument, Timeframe
 
 # In-memory cache only, default expiry 3 minutes
@@ -41,7 +43,7 @@ def fetch_data_with_cache(
 
     # 2. Cache miss or expired -> fetch live data
     try:
-        live_df = original_fetch_data(instrument, timeframe, limit=None, adjust=adjust)
+        live_df = original_fetch_data(instrument, timeframe, limit=limit, adjust=adjust)
     except DataFetchError:
         raise
     except Exception as exc:  # normalize unexpected errors
@@ -53,10 +55,10 @@ def fetch_data_with_cache(
         raise DataFetchError(f"No data available for {instrument.label} {timeframe.label}")
 
     result_df = live_df.copy()
-    if CACHE_CONFIG["enabled"]:
-        _data_cache[cache_key] = (current_time, result_df.copy())
     if limit and len(result_df) > limit:
         result_df = result_df.tail(limit)
+    if CACHE_CONFIG["enabled"]:
+        _data_cache[cache_key] = (current_time, result_df.copy())
     return result_df.reset_index(drop=True)
 
 

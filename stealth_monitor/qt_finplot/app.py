@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Dict, Tuple
 import threading
+import time
 import signal
 
 import numpy as np
@@ -206,12 +207,14 @@ class DataAdaptor:
     Bridge between the existing data pipeline and the new finplot-based view.
     """
 
-    def __init__(self, *, history_limit: int = 200, ma_period: int = 1) -> None:
-        self.history_limit = history_limit
+    def __init__(self, *, history_limit: int = 500, ma_period: int = 1) -> None:
+        self.history_limit = max(history_limit, 1)
         self.ma_period = ma_period
         self._ttl = timedelta(minutes=3)
         self._cache: Dict[Tuple[str, str], Tuple[datetime, pd.DataFrame]] = {}
         self._lock = threading.Lock()
+        self._throttle_interval = timedelta(seconds=10)
+        self._last_fetch_time: Dict[Tuple[str, str], datetime] = {}
 
     @staticmethod
     def _ensure_datetime(df: pd.DataFrame) -> pd.DataFrame:
@@ -219,6 +222,35 @@ class DataAdaptor:
         df["datetime"] = pd.to_datetime(df["datetime"], utc=False)
         df = df.sort_values("datetime").reset_index(drop=True)
         return df
+
+    @staticmethod
+    def _ensure_numeric(df: pd.DataFrame) -> pd.DataFrame:
+        required_cols = ["open", "high", "low", "close", "volume"]
+        missing = [col for col in required_cols if col not in df.columns]
+        if missing:
+            raise ValueError(f"数据缺少必要列: {', '.join(missing)}")
+
+        numeric_df = df.copy()
+        for col in required_cols:
+            numeric_df[col] = pd.to_numeric(numeric_df[col], errors="coerce")
+            if numeric_df[col].isna().all():
+                raise ValueError(f"列 {col} 不包含有效数值数据")
+
+        return numeric_df
+
+    @staticmethod
+    def _merge_frames(existing: pd.DataFrame, incoming: pd.DataFrame) -> pd.DataFrame:
+        if existing.empty:
+            return incoming.copy()
+        if incoming.empty:
+            return existing.copy()
+
+        new_start = incoming["datetime"].min()
+        older = existing[existing["datetime"] < new_start]
+        merged = pd.concat([older, incoming], ignore_index=True)
+        merged = merged.drop_duplicates(subset="datetime", keep="last")
+        merged = merged.sort_values("datetime", ignore_index=True)
+        return merged
 
     def _cache_key(self, selection: MarketSelection) -> Tuple[str, str]:
         return (selection.instrument_key, selection.timeframe_key)
@@ -242,18 +274,57 @@ class DataAdaptor:
     def fetch(self, selection: MarketSelection, *, force_refresh: bool = False) -> Tuple[pd.DataFrame, str]:
         plan = TIMEFRAME_CONFIG[selection.timeframe_key][1]
         prefer_cache = not force_refresh
-        df = load_market_data(
-            selection.instrument_key,
-            plan,
-            limit=self.history_limit,
-            prefer_cache=prefer_cache,
-        )
-        cleaned = self._ensure_datetime(df)
         key = self._cache_key(selection)
+
+        wait_seconds = 0.0
+        now = datetime.now()
         with self._lock:
-            self._cache[key] = (datetime.now(), cleaned.copy(deep=True))
+            last_fetch = self._last_fetch_time.get(key)
+        if last_fetch is not None:
+            elapsed = now - last_fetch
+            if elapsed < self._throttle_interval:
+                wait_seconds = (self._throttle_interval - elapsed).total_seconds()
+        if wait_seconds > 0:
+            time.sleep(wait_seconds)
+
+        fetch_started = datetime.now()
+        try:
+            df = load_market_data(
+                selection.instrument_key,
+                plan,
+                limit=self.history_limit,
+                prefer_cache=prefer_cache,
+            )
+        except BaseException:
+            with self._lock:
+                self._last_fetch_time[key] = fetch_started
+            raise
+
+        with self._lock:
+            self._last_fetch_time[key] = datetime.now()
+
+        cleaned = self._ensure_datetime(df)
+        cleaned = self._ensure_numeric(cleaned)
+        limited = cleaned.tail(self.history_limit).reset_index(drop=True)
+        if limited.empty:
+            raise ValueError("没有可用于绘制的行情数据")
+
+        with self._lock:
+            cached_entry = self._cache.get(key)
+
+        if cached_entry:
+            _, cached_df = cached_entry
+            merged = self._merge_frames(cached_df, limited)
+        else:
+            merged = limited.copy()
+
+        merged = self._ensure_numeric(merged)
+        merged = merged.tail(self.history_limit).reset_index(drop=True)
+
+        with self._lock:
+            self._cache[key] = (datetime.now(), merged.copy(deep=True))
         source = "cache" if prefer_cache else "network"
-        return cleaned, source
+        return merged.copy(deep=True), source
 
 
 class DataFetchTask(QtCore.QRunnable):
@@ -289,11 +360,11 @@ class DataFetchTask(QtCore.QRunnable):
                 source=source,
             )
             self._signals.data_ready.emit(result)
-        except Exception as exc:  # pragma: no cover - defensive
+        except BaseException as exc:  # pragma: no cover - defensive
             error = FetchError(
                 selection=self._selection,
                 request_id=self._request_id,
-                message=str(exc),
+                message=f"{exc.__class__.__name__}: {exc}",
             )
             self._signals.data_failed.emit(error)
 
